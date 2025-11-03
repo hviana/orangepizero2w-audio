@@ -1,4 +1,8 @@
 # orangepizero2w-audio
+Create A Disk Image Without Enough Free Space
+```bash
+dd if=/dev/sda | cp --sparse=always /dev/stdin backup.img
+```
 orangepizero2w audio
 ```bash
 # Create the directory for user overlays
