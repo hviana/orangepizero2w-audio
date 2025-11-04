@@ -5,7 +5,7 @@ sudo apt update && sudo apt install -y \
 0ad supertuxkart supertux \
 openttd openttd-opengfx openttd-opensfx openttd-openmsx \
 minetest wesnoth warzone2100 \
-hedgewars freeciv-client-gtk3 freedroidrpg \
+hedgewars freeciv-client-gtk3 \
 neverball neverputt bzflag frozen-bubble armagetronad \
 openoffice vlc 7zip gimp evince
 ```
