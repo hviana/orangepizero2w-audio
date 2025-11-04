@@ -1,7 +1,13 @@
 # orangepizero2w-audio
-Create A Disk Image Without Enough Free Space
+install software
 ```bash
-dd if=/dev/sda | cp --sparse=always /dev/stdin backup.img
+sudo apt update && sudo apt install -y \
+0ad supertuxkart supertux \
+openttd openttd-opengfx openttd-opensfx openttd-openmsx \
+minetest wesnoth warzone2100 \
+hedgewars freeciv-client-gtk3 freedroidrpg \
+neverball neverputt bzflag frozen-bubble armagetronad \
+openoffice vlc 7zip gimp evince
 ```
 orangepizero2w audio
 ```bash
