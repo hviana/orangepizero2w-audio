@@ -10,6 +10,25 @@ nexuiz redeclipse openarena sauerbraten teeworlds teeworlds-data \
 extremetuxracer megaglest megaglest-data torcs flightgear freeorion \
 scummvm beneath-a-steel-sky flight-of-the-amazon-queen lure-of-the-temptress drascula \
 libreoffice vlc 7zip gimp evince chromium
+
+fix desktop links
+```bash
+# 1) Garanta a ferramenta de validação de .desktop (opcional mas útil)
+sudo apt update && sudo apt install -y desktop-file-utils
+
+# 2) Adicione /usr/games e /usr/local/games ao PATH da sessão gráfica (válido p/ LXDE)
+echo 'export PATH="$PATH:/usr/games:/usr/local/games"' | \
+  sudo tee /etc/X11/Xsession.d/99-games-path >/dev/null
+sudo chmod +x /etc/X11/Xsession.d/99-games-path
+
+# 3) Recrie caches de atalhos e recarregue o painel do LXDE
+sudo update-desktop-database /usr/share/applications/ || true
+update-desktop-database ~/.local/share/applications/ || true
+rm -rf ~/.cache/menu-cache-* 2>/dev/null || true
+lxpanelctl restart || true
+sudo reboot
+```
+
 ```
 orangepizero2w audio
 ```bash
