@@ -11,6 +11,12 @@ extremetuxracer megaglest megaglest-data torcs flightgear freeorion \
 scummvm beneath-a-steel-sky flight-of-the-amazon-queen lure-of-the-temptress drascula \
 libreoffice vlc 7zip gimp evince chromium default-jre libreoffice-java-common
 ```
+update kernel
+```bash
+sudo apt update
+sudo apt install --reinstall linux-image-current-sunxi64 linux-dtb-current-sunxi64
+sudo reboot
+```
 fix desktop links
 ```bash
 # 1) Garanta a ferramenta de validação de .desktop (opcional mas útil)
