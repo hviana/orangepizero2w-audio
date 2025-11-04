@@ -1,40 +1,5 @@
 # enable orangepi zero 2w audio and gpu
-install software
-```bash
-sudo apt update && sudo apt install -y \
-games-all games-finest games-arcade games-fps games-strategy games-rpg games-platform games-racing games-simulation games-sport games-rogue games-adventure games-card games-emulator \
-0ad supertuxkart supertux openttd openttd-opengfx openttd-opensfx openttd-openmsx minetest wesnoth warzone2100 hedgewars freeciv-client-gtk3 \
-neverball neverputt bzflag frozen-bubble armagetronad xmoto lincity-ng \
-flare-engine flare-game openclonk openclonk-data freedoom crispy-doom \
-nexuiz redeclipse openarena sauerbraten teeworlds teeworlds-data \
-extremetuxracer megaglest megaglest-data torcs flightgear freeorion quake \
-scummvm beneath-a-steel-sky flight-of-the-amazon-queen lure-of-the-temptress drascula \
-libreoffice vlc 7zip gimp evince chromium default-jre libreoffice-java-common git
-```
-update kernel
-```bash
-sudo apt update
-sudo apt install --reinstall linux-image-current-sunxi64 linux-dtb-current-sunxi64
-sudo reboot
-```
-fix desktop links
-```bash
-# 1) Garanta a ferramenta de validação de .desktop (opcional mas útil)
-sudo apt update && sudo apt install -y desktop-file-utils
-
-# 2) Adicione /usr/games e /usr/local/games ao PATH da sessão gráfica (válido p/ LXDE)
-echo 'export PATH="$PATH:/usr/games:/usr/local/games"' | \
-  sudo tee /etc/X11/Xsession.d/99-games-path >/dev/null
-sudo chmod +x /etc/X11/Xsession.d/99-games-path
-
-# 3) Recrie caches de atalhos e recarregue o painel do LXDE
-sudo update-desktop-database /usr/share/applications/ || true
-update-desktop-database ~/.local/share/applications/ || true
-rm -rf ~/.cache/menu-cache-* 2>/dev/null || true
-lxpanelctl restart || true
-sudo reboot
-```
-enable orangepi zero 2w audio and gpu
+compile:
 ```bash
 # Create the directory for user overlays
 mkdir -p /boot/overlay-user
