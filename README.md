@@ -7,7 +7,7 @@ games-all games-finest games-arcade games-fps games-strategy games-rpg games-pla
 neverball neverputt bzflag frozen-bubble armagetronad xmoto lincity-ng \
 flare-engine flare-game openclonk openclonk-data freedoom crispy-doom \
 nexuiz redeclipse openarena sauerbraten teeworlds teeworlds-data \
-extremetuxracer megaglest megaglest-data torcs flightgear freeorion \
+extremetuxracer megaglest megaglest-data torcs flightgear freeorion quake \
 scummvm beneath-a-steel-sky flight-of-the-amazon-queen lure-of-the-temptress drascula \
 libreoffice vlc 7zip gimp evince chromium default-jre libreoffice-java-common
 ```
