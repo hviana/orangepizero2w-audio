@@ -4,7 +4,7 @@ install software
 sudo apt update && sudo apt install -y \
 games-all games-finest games-arcade games-fps games-strategy games-rpg games-platform games-racing games-simulation games-sport games-rogue games-adventure games-card games-emulator \
 0ad supertuxkart supertux openttd openttd-opengfx openttd-opensfx openttd-openmsx minetest wesnoth warzone2100 hedgewars freeciv-client-gtk3 \
-neverball neverputt bzflag frozen-bubble armagetronad xmoto lincity-ng \
+neverball neverputt bzflag frozen-bubble armagetronad xmoto lincity-ng xgalaga \
 flare-engine flare-game openclonk openclonk-data freedoom crispy-doom \
 nexuiz redeclipse openarena sauerbraten teeworlds teeworlds-data \
 extremetuxracer megaglest megaglest-data torcs flightgear freeorion quake \
