@@ -10,7 +10,7 @@ nexuiz redeclipse openarena sauerbraten teeworlds teeworlds-data \
 extremetuxracer megaglest megaglest-data torcs flightgear freeorion \
 scummvm beneath-a-steel-sky flight-of-the-amazon-queen lure-of-the-temptress drascula \
 libreoffice vlc 7zip gimp evince chromium default-jre libreoffice-java-common
-
+```
 fix desktop links
 ```bash
 # 1) Garanta a ferramenta de validação de .desktop (opcional mas útil)
@@ -27,8 +27,6 @@ update-desktop-database ~/.local/share/applications/ || true
 rm -rf ~/.cache/menu-cache-* 2>/dev/null || true
 lxpanelctl restart || true
 sudo reboot
-```
-
 ```
 orangepizero2w audio
 ```bash
