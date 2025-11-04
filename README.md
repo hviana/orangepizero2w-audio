@@ -7,7 +7,7 @@ openttd openttd-opengfx openttd-opensfx openttd-openmsx \
 minetest wesnoth warzone2100 \
 hedgewars freeciv-client-gtk3 \
 neverball neverputt bzflag frozen-bubble armagetronad \
-openoffice vlc 7zip gimp evince
+openoffice vlc 7zip gimp evince chromium
 ```
 orangepizero2w audio
 ```bash
