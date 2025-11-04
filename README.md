@@ -1,4 +1,4 @@
-# orangepizero2w-audio
+# enable orangepi zero 2w audio and gpu
 install software
 ```bash
 sudo apt update && sudo apt install -y \
@@ -34,7 +34,7 @@ rm -rf ~/.cache/menu-cache-* 2>/dev/null || true
 lxpanelctl restart || true
 sudo reboot
 ```
-orangepizero2w audio
+enable orangepi zero 2w audio and gpu
 ```bash
 # Create the directory for user overlays
 mkdir -p /boot/overlay-user
