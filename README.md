@@ -148,4 +148,4 @@ sudo cp sun50i-h616-audiogpu.dtbo /boot/dtb/allwinner/overlay/
 
 #FINALLY, ENABLE audiogpu OVERLAY ON KERNEL CONFIG!
 
-``
+```
