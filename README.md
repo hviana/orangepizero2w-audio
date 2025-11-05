@@ -2,10 +2,8 @@
 compile:
 ```bash
 # Create the directory for user overlays
-mkdir -p /boot/overlay-user
-cd /boot/overlay-user
 # Create the overlay source file
-cat << '_EOF_' > sound-hdmi-jack-i2s0-hat.dts
+cat << '_EOF_' > sun50i-h616-audiogpu.dts
 /dts-v1/;
 /plugin/;
 / {
@@ -143,9 +141,11 @@ _EOF_
 # Install the device tree compiler
 apt install device-tree-compiler
 # Compile the overlay binary file
-dtc -I dts -O dtb -o sound-hdmi-jack-i2s0-hat.dtbo -@ sound-hdmi-jack-i2s0-hat.dts
-# To see the result of the compiler uncommit next line
-#fdtdump sound-hdmi-jack-i2s0-hat.dtbo
-# Enable the user overlay via U-Boot environment file
-#G_CONFIG_INJECT 'user_overlays=' 'user_overlays=sound-hdmi-jack-i2s0-hat' /boot/dietpiEnv.txt
+dtc -@ -I dts -O dtb -o sun50i-h616-audiogpu.dtbo sun50i-h616-audiogpu.dts
+
+#copy to overlays:
+sudo cp sun50i-h616-audiogpu.dtbo /boot/dtb/allwinner/overlay/
+
+#FINALLY, ENABLE audiogpu OVERLAY ON KERNEL CONFIG!
+
 ``
