@@ -290,11 +290,16 @@ ensure_headers() {
     echo "Please install the correct headers for your kernel (exact match to $(uname -r)) and re-run if needed."
   fi
 
-  # Try modules-extra with same suffix if it exists
-  local suffix="${hdr#linux-headers-}" extra="linux-modules-extra-$suffix"
-  if apt-cache policy "$extra" 2>/dev/null | grep -q 'Candidate:'; then
-    install_pkg_if_needed "$extra" || true
-  fi
+# Try modules-extra with same suffix if it exists
+local suffix
+suffix="${hdr#linux-headers-}"
+
+local extra
+extra="linux-modules-extra-$suffix"
+
+if apt-cache policy "$extra" 2>/dev/null | grep -q 'Candidate:'; then
+  install_pkg_if_needed "$extra" || true
+fi
 
   ((hdr_ok)) || true
 }
