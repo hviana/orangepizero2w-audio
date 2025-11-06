@@ -2,6 +2,7 @@
 (Thanks to Totof in https://dietpi.com/forum/t/no-sound-card-detected-for-opi-zero-2w/20133/89)
 compile:
 ```bash
+#!/usr/bin/env bash
 # Create the directory for user overlays
 # Create the overlay source file
 cat << '_EOF_' > sun50i-h616-audiogpu.dts
@@ -141,197 +142,171 @@ cat << '_EOF_' > sun50i-h616-audiogpu.dts
 _EOF_
 
 #install AHUB (kernel 6.16.8+)
-#!/bin/bash
-# Script to automatically install the ahub kernel module using DKMS on Debian
-# V6: Uses a Pure BASH/AWK Weighted Similarity Score to find the best header match.
+set -Eeuo pipefail
 
-# --- Configuration ---
-MODULE_NAME="ahub"
-MODULE_VERSION="1.0"
-SOURCE_DIR="$HOME/ahub-module-source" # *** REPLACE WITH ACTUAL PATH TO AHUB SOURCE ***
-RUNNING_KERNEL="$(uname -r)"
+# --- helpers --------------------------------------------------------------
 
-# --- Check for Root Privileges ---
-if [ "$EUID" -ne 0 ]; then
-  echo "❌ Error: This script must be run as root."
-  echo "   Please run with 'sudo ./install_ahub_smarter.sh'"
-  exit 1
-fi
-
-echo "🚀 Starting automatic DKMS installation for the '$MODULE_NAME' module..."
-echo "Running Kernel (uname -r): $RUNNING_KERNEL"
-echo "---"
-
-# --- 1. Install Dependencies ---
-echo "⚙️  1. Ensuring necessary tools (dkms, build-essential) are installed..."
-apt update
-apt install -y dkms build-essential
-
-# --- 2. AWK Function for Similarity Calculation (Weighted Match Score) ---
-# This AWK script calculates a score based on character matches:
-# Score = (Total Matching Characters / Total Characters in Longest String) * Positional Adjustment
-# This is a proxy for Levenshtein that works within the shell environment.
-AWK_SCRIPT='
-BEGIN {
-    FS="|"
-    # Store the running kernel name for comparison
-    target_name = ARGV[1];
-    ARGV[1] = "" # Clear the target name from ARGV so awk doesn't treat it as a file
+require_root() {
+  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    exec sudo -E "$0" "$@"
+  fi
 }
 
-function calculate_score(package_name, target) {
-    # 1. Normalize the package name (remove "linux-headers-")
-    gsub("linux-headers-", "", package_name);
+have() { command -v "$1" >/dev/null 2>&1; }
 
-    len_pkg = length(package_name);
-    len_target = length(target);
-    len_max = (len_pkg > len_target) ? len_pkg : len_target;
-    
-    match_count = 0;
-    
-    # Simple weighted character match: +1 for character match, -0.1 for mismatch
-    for (i = 1; i <= len_max; i++) {
-        pkg_char = substr(package_name, i, 1);
-        target_char = substr(target, i, 1);
+die() { echo "Error: $*" >&2; exit 1; }
 
-        if (pkg_char == target_char) {
-            match_count += 1;
-        } else if (pkg_char != "" && index(target, pkg_char) > 0) {
-            # Character exists but is misplaced: score partial credit
-            match_count += 0.5;
-        } else if (target_char != "" && index(package_name, target_char) > 0) {
-            # Character exists but is misplaced: score partial credit
-            match_count += 0.5;
-        } else {
-            # No match or misalignment (penalty equivalent)
-            match_count -= 0.1;
-        }
-    }
-    
-    # Final Score: Normalized by length
-    if (len_max > 0) {
-        return (match_count / len_max);
-    }
-    return 0;
+# Pure-bash Levenshtein distance (O(n*m)) + common-prefix bonus for "smart" similarity
+# Returns a numeric score where LOWER distance and HIGHER prefix length => LOWER score (better).
+levenshtein() {
+  local s1=$1 s2=$2
+  local -i len1=${#s1} len2=${#s2}
+  local -a prev curr
+  local -i i j cost del ins sub
+
+  # prefix bonus (larger common prefix => better); we subtract it later to improve similarity
+  local -i p=0
+  local -i minlen=$(( len1 < len2 ? len1 : len2 ))
+  for ((i=0;i<minlen;i++)); do
+    [[ ${s1:i:1} == "${s2:i:1}" ]] || break
+    ((p++))
+  done
+
+  for ((j=0;j<=len2;j++)); do prev[j]=j; done
+  for ((i=1;i<=len1;i++)); do
+    curr[0]=$i
+    for ((j=1;j<=len2;j++)); do
+      cost=$(( ${s1:i-1:1} == "${s2:j-1:1}" ? 0 : 1 ))
+      del=$(( prev[j] + 1 ))
+      ins=$(( curr[j-1] + 1 ))
+      sub=$(( prev[j-1] + cost ))
+      curr[j]=$del
+      (( ins < curr[j] )) && curr[j]=$ins
+      (( sub < curr[j] )) && curr[j]=$sub
+    done
+    prev=("${curr[@]}")
+  done
+
+  # We bias the score with prefix bonus (bigger prefix lowers the score).
+  # Also include absolute length gap to prefer very close lengths.
+  local -i dist=${prev[len2]}
+  local -i len_gap=$(( len1 > len2 ? len1 - len2 : len2 - len1 ))
+  # Final score: distance + small length gap penalty - prefix bonus
+  echo $(( dist + (len_gap/2) - p ))
 }
 
-# Main loop to process packages fed via stdin
-{
-    package_name = $1;
-    # Only process packages starting with 'linux-headers'
-    if (package_name ~ /^linux-headers/) {
-        score = calculate_score(package_name, target_name);
-        if (score > max_score) {
-            max_score = score;
-            best_match = package_name;
-        }
-        
-        # Print all scores for debugging (optional)
-        # print package_name "|" score > "/dev/stderr"; 
-    }
+best_header_pkg() {
+  local kr="$(uname -r)"
+  local best_pkg="" best_suffix="" best_score=999999
+
+  # 1) Gather candidate names from APT (package names only)
+  mapfile -t pkgs < <(apt-cache --names-only search '^linux-headers-' 2>/dev/null | while read -r a _; do [[ $a == linux-headers-* ]] && echo "$a"; done)
+
+  # 2) Fallback to any installed headers in /usr/src (derive a pkg-like name)
+  if ((${#pkgs[@]}==0)); then
+    for d in /usr/src/linux-headers-*; do
+      [[ -d "$d" ]] || continue
+      pkgs+=("$(basename "$d")")
+    done
+  fi
+
+  ((${#pkgs[@]})) || die "No linux-headers packages found via APT or /usr/src."
+
+  # 3) Score each candidate against uname -r using our pure-bash similarity
+  for pkg in "${pkgs[@]}"; do
+    local suffix="${pkg#linux-headers-}"
+    local score
+    score=$(levenshtein "$kr" "$suffix")
+    if (( score < best_score )); then
+      best_score=$score
+      best_pkg="$pkg"
+      best_suffix="$suffix"
+    fi
+  done
+
+  echo "$best_pkg"
 }
 
-END {
-    # Output the best match and score
-    if (best_match != "") {
-        printf "%s|%.4f\n", best_match, max_score;
-    } else {
-        printf "NO_MATCH|0.0\n";
-    }
-}'
+try_install_pkg() {
+  local pkg=$1
+  if dpkg -s "$pkg" >/dev/null 2>&1; then
+    echo "[$pkg] already installed."
+  else
+    echo "Installing [$pkg]..."
+    apt-get update -y
+    apt-get install -y "$pkg"
+  fi
+}
 
-# --- 3. Execute AWK Similarity Finder ---
-echo "🔍 2. Searching repositories for best kernel header match..."
-# 1. Get all linux-headers packages
-# 2. Pipe the list into the AWK script for scoring
-MATCH_OUTPUT=$(apt-cache search linux-headers 2>/dev/null | awk '{print $1}' | awk -v target_name="$RUNNING_KERNEL" "$AWK_SCRIPT" "$RUNNING_KERNEL")
+load_ahub_module() {
+  # Try a handful of plausible module names across sunxi variants.
+  local candidates=(
+    sun8i-ahub
+    sun50i-ahub
+    sunxi-ahub
+    snd-soc-sun8i-ahub
+    snd-sun8i-ahub
+    snd-soc-sunxi-ahub
+  )
 
-BEST_HEADER_PACKAGE=$(echo "$MATCH_OUTPUT" | cut -d'|' -f1)
-SIMILARITY_SCORE=$(echo "$MATCH_OUTPUT" | cut -d'|' -f2)
+  for m in "${candidates[@]}"; do
+    if modinfo "$m" >/dev/null 2>&1; then
+      echo "Found module [$m]; attempting to load..."
+      if modprobe "$m"; then
+        echo "Loaded [$m] successfully ✅"
+        return 0
+      fi
+    fi
+  done
 
-# --- 4. User Confirmation ---
-if [ "$BEST_HEADER_PACKAGE" = "NO_MATCH" ] || (( $(echo "$SIMILARITY_SCORE < 0.3" | bc -l) )); then
-    echo "❌ ERROR: No suitable linux-headers package found (Max Score: $SIMILARITY_SCORE)."
-    echo "   Please check your APT configuration and repositories."
-    exit 1
-fi
+  echo "Could not find a loadable AHUB module on this kernel."
+  echo "If your kernel doesn't ship AHUB as a module, you may need a kernel with AHUB enabled or build it via DKMS."
+  return 1
+}
 
-echo "---"
-echo "✅ BEST MATCH FOUND (based on weighted character match):"
-echo "   Running Kernel: $RUNNING_KERNEL"
-echo "   Package:        $BEST_HEADER_PACKAGE"
-echo "   Similarity:     $(echo "scale=2; $SIMILARITY_SCORE * 100" | bc | cut -d'.' -f1,2)%"
-echo "---"
+# --- main ----------------------------------------------------------------
 
-read -r -p "Is this the correct header package to install? (Y/n): " CONFIRMATION
+require_root "$@"
 
-if [[ "$CONFIRMATION" =~ ^[Nn]$ ]]; then
-    echo "Aborting at user request. Please run 'apt-cache search linux-headers' to find the correct package manually."
-    exit 0
-fi
+KREL="$(uname -r)"
+echo "Running kernel: $KREL"
+echo "Discovering best-matching linux-headers package using a pure-bash similarity algorithm..."
 
-# --- 5. Install Headers and Continue DKMS Process ---
-echo "⚙️  3. Installing the confirmed header package: $BEST_HEADER_PACKAGE"
-apt install -y "$BEST_HEADER_PACKAGE"
+HDR_PKG="$(best_header_pkg)"
+[[ -n "$HDR_PKG" ]] || die "Failed to determine a headers package."
 
-if [ $? -ne 0 ]; then
-  echo "❌ Error: Failed to install the header package ($BEST_HEADER_PACKAGE). Aborting."
-  exit 1
-fi
-
-# --- 6. DKMS Source Validation ---
-echo "---"
-echo "📂 4. Validating DKMS source directory and configuration..."
-if [ ! -d "$SOURCE_DIR" ]; then
-  echo "❌ Error: Module source directory not found at $SOURCE_DIR"
-  exit 1
-fi
-
-if [ ! -f "$SOURCE_DIR/dkms.conf" ]; then
-  echo "❌ Error: **dkms.conf** not found in the source directory. Aborting."
-  echo "   (You must create this file for DKMS to work.)"
-  exit 1
-fi
-
-# --- 7. DKMS Installation Steps ---
-DKMS_TREE="/usr/src/$MODULE_NAME-$MODULE_VERSION"
-echo "📂 5. Copying source to DKMS tree: $DKMS_TREE"
-rm -rf "$DKMS_TREE"
-mkdir -p "$DKMS_TREE"
-cp -r "$SOURCE_DIR"/* "$DKMS_TREE"/
-
-echo "➕ 6. Adding module to DKMS"
-dkms add "$MODULE_NAME/$MODULE_VERSION"
-
-echo "🔨 7. Building the kernel module"
-dkms build "$MODULE_NAME/$MODULE_VERSION"
-if [ $? -ne 0 ]; then
-  echo "❌ Error: Failed to build the module. Check your module source/Makefile."
-  exit 1
-fi
-
-echo "✅ 8. Installing the kernel module"
-dkms install "$MODULE_NAME/$MODULE_VERSION"
-if [ $? -ne 0 ]; then
-  echo "❌ Error: Failed to install the module."
-  exit 1
-fi
-
-# --- 8. Load Module and Final Checks ---
-echo "🔌 9. Loading the module into the running kernel"
-modprobe "$MODULE_NAME"
-
-echo "🔍 10. Verifying installation..."
-if lsmod | grep -q "$MODULE_NAME"; then
-  echo "🎉 **SUCCESS!** The '$MODULE_NAME' module is loaded and installed via DKMS."
-  echo "   It will be automatically rebuilt for future kernel updates."
+echo
+echo "Suggested headers package: $HDR_PKG"
+read -r -p "Install this header for \"$KREL\"? [Y/n] " ans
+ans=${ans:-Y}
+if [[ "$ans" =~ ^[Yy]$ ]]; then
+  try_install_pkg "$HDR_PKG"
 else
-  echo "⚠️  Warning: Module installation finished, but it is not currently loaded. Check 'dmesg'."
+  echo "Please install the correct headers for your kernel manually (matching: $(uname -r)), then re-run this script."
+  exit 1
 fi
 
-echo "---"
-echo "DKMS Status:"
-dkms status "$MODULE_NAME"
+# Try to also install 'linux-modules-extra-<suffix>' if it exists (Debian generic often uses this)
+SUFFIX="${HDR_PKG#linux-headers-}"
+EXTRA="linux-modules-extra-$SUFFIX"
+if apt-cache policy "$EXTRA" 2>/dev/null | grep -q 'Candidate:'; then
+  try_install_pkg "$EXTRA" || true
+fi
+
+echo
+echo "Attempting to load an AHUB module..."
+if load_ahub_module; then
+  echo "Done."
+  exit 0
+fi
+
+echo
+echo "AHUB module not present or not loadable."
+echo "Next steps:"
+echo "  1) Ensure you're on a kernel that includes Allwinner AHUB as a module."
+echo "  2) If not, build AHUB via DKMS or switch to a kernel flavor that ships it."
+exit 2
+
 
 
 # Install the device tree compiler
