@@ -3,7 +3,6 @@
 compile:
 ```bash
 #!/usr/bin/env bash
-set -Eeuo pipefail
 
 # Create the directory for user overlays
 # Create the overlay source file
