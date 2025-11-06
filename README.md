@@ -3,6 +3,8 @@
 compile:
 ```bash
 #!/usr/bin/env bash
+set -Eeuo pipefail
+
 # Create the directory for user overlays
 # Create the overlay source file
 cat << '_EOF_' > sun50i-h616-audiogpu.dts
@@ -141,32 +143,45 @@ cat << '_EOF_' > sun50i-h616-audiogpu.dts
 };
 _EOF_
 
-#install AHUB (kernel 6.16.8+)
-set -Eeuo pipefail
+#install AHUB
 
-# --- helpers --------------------------------------------------------------
+# ===================== USER-CONFIGURABLE SECTION ==========================
+# You can target more than one module "family" by adding patterns here.
+# The script will try to find, load, or DKMS-build a good match for each.
+WANTED_MODULE_PATTERNS=( "ahub" )
+
+# Optional hints to bias module selection if multiple *.ko exist.
+MODULE_NAME_HINTS=( "snd-soc-sun8i-ahub" "snd-soc-sunxi-ahub" "sun8i-ahub" "sun50i-ahub" )
+
+# Extra build tools that help with DKMS fallback:
+BUILD_DEPS=( dkms build-essential bc flex bison libssl-dev libelf-dev dwarves )
+# ==========================================================================
 
 require_root() {
   if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    echo "[sudo] escalating privileges..."
     exec sudo -E "$0" "$@"
   fi
 }
 
 have() { command -v "$1" >/dev/null 2>&1; }
+die()  { echo "Error: $*" >&2; exit 1; }
 
-die() { echo "Error: $*" >&2; exit 1; }
+ask_yn() {
+  local prompt="$1" default="${2:-Y}" ans
+  read -r -p "$prompt [${default}/n] " ans || true
+  ans=${ans:-$default}
+  [[ $ans =~ ^[Yy]$ ]]
+}
 
-# Pure-bash Levenshtein distance (O(n*m)) + common-prefix bonus for "smart" similarity
-# Returns a numeric score where LOWER distance and HIGHER prefix length => LOWER score (better).
+# --------- Pure-bash similarity: Levenshtein + prefix bonus + length gap -----
 levenshtein() {
   local s1=$1 s2=$2
-  local -i len1=${#s1} len2=${#s2}
+  local -i len1=${#s1} len2=${#s2} i j
   local -a prev curr
-  local -i i j cost del ins sub
+  local -i p=0 minlen=$(( len1 < len2 ? len1 : len2 ))
 
-  # prefix bonus (larger common prefix => better); we subtract it later to improve similarity
-  local -i p=0
-  local -i minlen=$(( len1 < len2 ? len1 : len2 ))
+  # common-prefix length (bonus)
   for ((i=0;i<minlen;i++)); do
     [[ ${s1:i:1} == "${s2:i:1}" ]] || break
     ((p++))
@@ -176,137 +191,360 @@ levenshtein() {
   for ((i=1;i<=len1;i++)); do
     curr[0]=$i
     for ((j=1;j<=len2;j++)); do
-      cost=$(( ${s1:i-1:1} == "${s2:j-1:1}" ? 0 : 1 ))
-      del=$(( prev[j] + 1 ))
-      ins=$(( curr[j-1] + 1 ))
-      sub=$(( prev[j-1] + cost ))
-      curr[j]=$del
-      (( ins < curr[j] )) && curr[j]=$ins
-      (( sub < curr[j] )) && curr[j]=$sub
+      local cost
+      if [[ ${s1:i-1:1} == "${s2:j-1:1}" ]]; then cost=0; else cost=1; fi
+      # del/ins/sub
+      local del=$(( prev[j] + 1 ))
+      local ins=$(( curr[j-1] + 1 ))
+      local sub=$(( prev[j-1] + cost ))
+      local v=$del
+      (( ins < v )) && v=$ins
+      (( sub < v )) && v=$sub
+      curr[j]=$v
     done
     prev=("${curr[@]}")
   done
 
-  # We bias the score with prefix bonus (bigger prefix lowers the score).
-  # Also include absolute length gap to prefer very close lengths.
   local -i dist=${prev[len2]}
   local -i len_gap=$(( len1 > len2 ? len1 - len2 : len2 - len1 ))
-  # Final score: distance + small length gap penalty - prefix bonus
+  # final score: smaller is better
   echo $(( dist + (len_gap/2) - p ))
 }
 
-best_header_pkg() {
-  local kr="$(uname -r)"
-  local best_pkg="" best_suffix="" best_score=999999
-
-  # 1) Gather candidate names from APT (package names only)
-  mapfile -t pkgs < <(apt-cache --names-only search '^linux-headers-' 2>/dev/null | while read -r a _; do [[ $a == linux-headers-* ]] && echo "$a"; done)
-
-  # 2) Fallback to any installed headers in /usr/src (derive a pkg-like name)
-  if ((${#pkgs[@]}==0)); then
-    for d in /usr/src/linux-headers-*; do
-      [[ -d "$d" ]] || continue
-      pkgs+=("$(basename "$d")")
-    done
-  fi
-
-  ((${#pkgs[@]})) || die "No linux-headers packages found via APT or /usr/src."
-
-  # 3) Score each candidate against uname -r using our pure-bash similarity
-  for pkg in "${pkgs[@]}"; do
-    local suffix="${pkg#linux-headers-}"
-    local score
-    score=$(levenshtein "$kr" "$suffix")
+best_of_list() {
+  # args: <target-string> <list...>
+  local target="$1"; shift
+  local best="" best_score=999999 item score
+  for item in "$@"; do
+    score=$(levenshtein "$target" "$item")
     if (( score < best_score )); then
-      best_score=$score
-      best_pkg="$pkg"
-      best_suffix="$suffix"
+      best="$item"; best_score=$score
     fi
   done
-
-  echo "$best_pkg"
+  [[ -n $best ]] && echo "$best" || true
 }
 
-try_install_pkg() {
-  local pkg=$1
+kernel_rel() { uname -r; }
+
+hardware_signature() {
+  local s="" a=""
+  if [[ -r /proc/device-tree/model ]]; then
+    # remove embedded NULs
+    s="$(tr -d '\0' </proc/device-tree/model 2>/dev/null || true)"
+  fi
+  for f in /sys/devices/virtual/dmi/id/{board_vendor,board_name,product_name,sys_vendor}; do
+    [[ -r $f ]] && a+=" $(<"$f")"
+  done
+  a+=" $(uname -m) $(uname -s)"
+  s="${s:-$a}"
+  echo "${s,,}"  # lowercase
+}
+
+# --------------------- Headers discovery & install --------------------------
+find_header_pkg() {
+  local kr; kr="$(kernel_rel)"
+  local -a pkgs=()
+  mapfile -t pkgs < <(apt-cache --names-only search '^linux-headers-' 2>/dev/null \
+    | while read -r name _; do [[ $name == linux-headers-* ]] && echo "$name"; done)
+
+  # fallback: /usr/src
+  if ((${#pkgs[@]}==0)); then
+    for d in /usr/src/linux-headers-*; do [[ -d $d ]] && pkgs+=("$(basename "$d")"); done
+  fi
+  ((${#pkgs[@]})) || die "No linux-headers packages found."
+
+  local suffix scoresel sel
+  # score against the suffix after linux-headers-
+  local -a suffixes=()
+  for sel in "${pkgs[@]}"; do suffixes+=( "${sel#linux-headers-}" ); done
+  scoresel=$(best_of_list "$kr" "${suffixes[@]}")
+  for sel in "${pkgs[@]}"; do
+    if [[ ${sel#linux-headers-} == "$scoresel" ]]; then
+      echo "$sel"; return 0
+    fi
+  done
+}
+
+install_pkg_if_needed() {
+  local pkg="$1"
   if dpkg -s "$pkg" >/dev/null 2>&1; then
     echo "[$pkg] already installed."
   else
     echo "Installing [$pkg]..."
     apt-get update -y
-    apt-get install -y "$pkg"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "$pkg"
   fi
 }
 
-load_ahub_module() {
-  # Try a handful of plausible module names across sunxi variants.
-  local candidates=(
-    sun8i-ahub
-    sun50i-ahub
-    sunxi-ahub
-    snd-soc-sun8i-ahub
-    snd-sun8i-ahub
-    snd-soc-sunxi-ahub
-  )
+ensure_headers() {
+  local kr hdr hdr_ok=0
+  kr="$(kernel_rel)"
+  echo "Running kernel: $kr"
+  echo "Selecting best-matching linux headers (pure-bash similarity)..."
+  hdr="$(find_header_pkg)" || die "Could not determine headers package."
+  echo "Suggested headers package: $hdr"
+  if ask_yn "Install this header for \"$kr\"?"; then
+    install_pkg_if_needed "$hdr"
+    hdr_ok=1
+  else
+    echo "Please install the correct headers for your kernel (exact match to $(uname -r)) and re-run if needed."
+  fi
 
-  for m in "${candidates[@]}"; do
-    if modinfo "$m" >/dev/null 2>&1; then
-      echo "Found module [$m]; attempting to load..."
-      if modprobe "$m"; then
-        echo "Loaded [$m] successfully ✅"
-        return 0
-      fi
-    fi
-  done
+  # Try modules-extra with same suffix if it exists
+  local suffix="${hdr#linux-headers-}" extra="linux-modules-extra-$suffix"
+  if apt-cache policy "$extra" 2>/dev/null | grep -q 'Candidate:'; then
+    install_pkg_if_needed "$extra" || true
+  fi
 
-  echo "Could not find a loadable AHUB module on this kernel."
-  echo "If your kernel doesn't ship AHUB as a module, you may need a kernel with AHUB enabled or build it via DKMS."
-  return 1
+  ((hdr_ok)) || true
 }
 
-# --- main ----------------------------------------------------------------
+# --------------------- Module discovery / loading ---------------------------
+list_module_files_for_pattern() {
+  local pattern="$1"
+  local kr; kr="$(kernel_rel)"
+  # Find candidate *.ko files under /lib/modules/<kr>
+  find "/lib/modules/$kr" -type f -name "*${pattern,,}*.ko*" -printf "%f\n" 2>/dev/null | sort -u || true
+}
 
-require_root "$@"
+basename_without_ko() {
+  local base="${1##*/}"
+  base="${base%.xz}"
+  base="${base%.gz}"
+  base="${base%.zst}"
+  base="${base%.ko}"
+  echo "$base"
+}
 
-KREL="$(uname -r)"
-echo "Running kernel: $KREL"
-echo "Discovering best-matching linux-headers package using a pure-bash similarity algorithm..."
+module_loaded() { lsmod | grep -qw -- "$1"; }
+module_present() { modinfo "$1" >/dev/null 2>&1; }
 
-HDR_PKG="$(best_header_pkg)"
-[[ -n "$HDR_PKG" ]] || die "Failed to determine a headers package."
+pick_best_module_name() {
+  local pattern="$1"
+  local hw; hw="$(hardware_signature)"
+  local kr; kr="$(kernel_rel)"
 
-echo
-echo "Suggested headers package: $HDR_PKG"
-read -r -p "Install this header for \"$KREL\"? [Y/n] " ans
-ans=${ans:-Y}
-if [[ "$ans" =~ ^[Yy]$ ]]; then
-  try_install_pkg "$HDR_PKG"
-else
-  echo "Please install the correct headers for your kernel manually (matching: $(uname -r)), then re-run this script."
-  exit 1
-fi
+  # Candidates from filesystem
+  mapfile -t files < <(list_module_files_for_pattern "$pattern")
+  local -a names=()
+  local f
+  for f in "${files[@]}"; do names+=( "$(basename_without_ko "$f")" ); done
 
-# Try to also install 'linux-modules-extra-<suffix>' if it exists (Debian generic often uses this)
-SUFFIX="${HDR_PKG#linux-headers-}"
-EXTRA="linux-modules-extra-$SUFFIX"
-if apt-cache policy "$EXTRA" 2>/dev/null | grep -q 'Candidate:'; then
-  try_install_pkg "$EXTRA" || true
-fi
+  # Add hints (they may or may not exist; best_of_list will still consider them)
+  names+=( "${MODULE_NAME_HINTS[@]}" )
 
-echo
-echo "Attempting to load an AHUB module..."
-if load_ahub_module; then
-  echo "Done."
-  exit 0
-fi
+  # Dedup
+  local -A seen=()
+  local -a uniq=()
+  for f in "${names[@]}"; do
+    [[ -n $f && -z ${seen[$f]+x} ]] && { uniq+=("$f"); seen[$f]=1; }
+  done
+  ((${#uniq[@]})) || return 1
 
-echo
-echo "AHUB module not present or not loadable."
-echo "Next steps:"
-echo "  1) Ensure you're on a kernel that includes Allwinner AHUB as a module."
-echo "  2) If not, build AHUB via DKMS or switch to a kernel flavor that ships it."
-exit 2
+  local target="${hw} ${kr} ${pattern,,}"
+  best_of_list "$target" "${uniq[@]}"
+}
 
+load_or_install_module() {
+  local want_pattern="$1"
+
+  echo; echo "== Handling module pattern: '$want_pattern' =="
+  local best
+  best="$(pick_best_module_name "$want_pattern" || true)"
+
+  if [[ -n $best ]]; then
+    echo "Best match for hardware: $best"
+    if ask_yn "Use module '$best'?"; then
+      if module_loaded "$best"; then
+        echo "Module '$best' already loaded."
+        return 0
+      fi
+      if module_present "$best"; then
+        echo "Attempting to load '$best'..."
+        if modprobe "$best"; then
+          echo "Loaded '$best' successfully ✅"
+          return 0
+        else
+          echo "modprobe failed for '$best' (will attempt DKMS fallback)."
+        fi
+      else
+        echo "Module '$best' not present on disk (will attempt DKMS fallback)."
+      fi
+    else
+      echo "User declined '$best'."
+      # If user declines, we won't second-guess—try DKMS if nothing else exists.
+    fi
+  else
+    echo "No candidate module file found for pattern '$want_pattern'."
+  fi
+
+  echo "Falling back to DKMS build attempt for pattern '$want_pattern'..."
+  dkms_build_ahub "$want_pattern"
+}
+
+# --------------------------- DKMS fallback ----------------------------------
+choose_linux_source_tarball() {
+  # Pick the linux-source tarball that best matches uname -r
+  local -a tars=()
+  shopt -s nullglob
+  for t in /usr/src/linux-source-*.tar.*; do tars+=( "$(basename "$t")" ); done
+  shopt -u nullglob
+  ((${#tars[@]})) || return 1
+
+  local kr; kr="$(kernel_rel)"
+  best_of_list "$kr" "${tars[@]}"
+}
+
+ensure_linux_source() {
+  if ! choose_linux_source_tarball >/dev/null 2>&1; then
+    echo "No linux-source tarball found under /usr/src; trying to install..."
+    apt-get update -y
+    # Install generic 'linux-source' meta (creates /usr/src/linux-source-*.tar.xz)
+    DEBIAN_FRONTEND=noninteractive apt-get install -y linux-source || true
+  fi
+  choose_linux_source_tarball || return 1
+}
+
+extract_linux_source_if_needed() {
+  local tarball="$1"
+  local base="${tarball%.tar.*}"
+  local dir="/usr/src/${base}"
+  if [[ ! -d "$dir" ]]; then
+    echo "Extracting /usr/src/$tarball ..."
+    case "$tarball" in
+      *.tar.xz)  tar -C /usr/src -xf "/usr/src/$tarball" ;;
+      *.tar.gz)  tar -C /usr/src -xzf "/usr/src/$tarball" ;;
+      *.tar.zst) tar -C /usr/src --use-compress-program=unzstd -xf "/usr/src/$tarball" ;;
+      *)         tar -C /usr/src -xf "/usr/src/$tarball" ;;
+    esac
+  fi
+  echo "$dir"
+}
+
+dkms_build_ahub() {
+  local pattern="$1"
+  local kr; kr="$(kernel_rel)"
+
+  echo "Installing build deps (if missing): ${BUILD_DEPS[*]}"
+  apt-get update -y
+  DEBIAN_FRONTEND=noninteractive apt-get install -y "${BUILD_DEPS[@]}"
+
+  # Ensure headers are present (in case we skipped earlier)
+  install_pkg_if_needed "linux-headers-$(kernel_rel)" || true
+
+  local tarball
+  tarball="$(ensure_linux_source || true)"
+  if [[ -z $tarball ]]; then
+    echo "Could not get linux-source automatically. Please enable deb-src or install a suitable 'linux-source-*' package, then re-run."
+    return 2
+  fi
+
+  local srcdir
+  srcdir="$(extract_linux_source_if_needed "$tarball")"
+
+  # Find AHUB driver sources in kernel tree (common locations)
+  local cand
+  cand="$(cd "$srcdir" && { \
+    find sound -type f -iname '*ahub*.c' -print 2>/dev/null \
+    | head -n1; } || true)"
+  if [[ -z $cand ]]; then
+    echo "Could not locate an '*ahub*.c' inside $srcdir."
+    return 2
+  fi
+  local drvdir="$srcdir/$(dirname "$cand")"
+  local drvbase="$(basename "${cand%.c}")"   # e.g. sun8i-ahub
+  local kmake="$drvdir/Makefile"
+
+  # Try to infer final module ko basename from the Kbuild (e.g. snd-soc-sun8i-ahub)
+  local modko="$drvbase"
+  if [[ -f $kmake ]]; then
+    # Look for "*-objs := ... ahub.o" lines and capture the left side (module basename)
+    local line
+    line="$(grep -iE 'ahub[^:]*-objs|ahub[^:]*-y' "$kmake" | head -n1 || true)"
+    if [[ -n $line ]]; then
+      modko="$(echo "$line" | sed -E 's/[[:space:]]*[:-][^:]*[:=].*$//; s/[[:space:]]+//g')"
+      # Example: "snd-soc-sun8i-ahub-objs" -> "snd-soc-sun8i-ahub"
+      modko="${modko%-objs}"
+      modko="${modko%-y}"
+    fi
+  fi
+
+  local pkgname="${modko}-dkms"
+  local pkgver="1.0"
+  local dkms_root="/usr/src/${pkgname}-${pkgver}"
+
+  echo "Preparing DKMS package: $pkgname $pkgver"
+  rm -rf "$dkms_root"
+  mkdir -p "$dkms_root/build"
+
+  # Copy driver directory (safer than a single .c; keeps local headers/Makefile)
+  (cd "$drvdir/.." && tar -cf - "$(basename "$drvdir")") | (cd "$dkms_root/build" && tar -xf -)
+
+  # Minimal Kbuild to build only this module from the copied tree
+  cat >"$dkms_root/build/Makefile" <<EOF
+# Auto-generated DKMS Kbuild
+obj-m := ${modko}.o
+# Try to reuse Kbuild recipe if present; else default to a simple mapping
+# If upstream's Makefile defines ${modko}-objs or -y, include it;
+# otherwise assume single-object module from ${drvbase}.o
+${modko}-y := ${drvbase}.o
+ccflags-y += -Wno-error
+EOF
+
+  # dkms.conf
+  cat >"$dkms_root/dkms.conf" <<EOF
+PACKAGE_NAME="${pkgname}"
+PACKAGE_VERSION="${pkgver}"
+BUILT_MODULE_NAME[0]="${modko}"
+DEST_MODULE_LOCATION[0]="/kernel/extra"
+AUTOINSTALL="yes"
+MAKE[0]="make -C /lib/modules/\${kernelver}/build M=\${dkms_tree}/${pkgname}/${pkgver}/build modules"
+CLEAN="make -C /lib/modules/\${kernelver}/build M=\${dkms_tree}/${pkgname}/${pkgver}/build clean"
+EOF
+
+  echo "Registering DKMS module..."
+  dkms remove -m "$pkgname" -v "$pkgver" --all >/dev/null 2>&1 || true
+  dkms add -m "$pkgname" -v "$pkgver"
+
+  echo "Building for $kr ..."
+  if dkms build -m "$pkgname" -v "$pkgver" -k "$kr"; then
+    echo "Installing DKMS module..."
+    dkms install -m "$pkgname" -v "$pkgver" -k "$kr"
+    echo "Attempting to load '${modko}' ..."
+    if modprobe "$modko"; then
+      echo "Loaded '${modko}' successfully ✅"
+      return 0
+    else
+      echo "DKMS build installed, but modprobe failed for '${modko}'."
+      return 3
+    fi
+  else
+    echo "DKMS build failed. You may need a source tree closer to your exact kernel or additional dependencies."
+    return 4
+  fi
+}
+
+# --------------------------------- MAIN -------------------------------------
+main() {
+  require_root "$@"
+
+  # 1) Headers: pick best by similarity and ask for confirmation
+  ensure_headers || true
+
+  # 2) For each requested module pattern: find best candidate, confirm, load; else DKMS
+  local pat
+  for pat in "${WANTED_MODULE_PATTERNS[@]}"; do
+    load_or_install_module "$pat" || true
+  done
+
+  echo
+  echo "All done. If a module didn't load:"
+  echo "  - Ensure your kernel actually supports it (not built-in or disabled)"
+  echo "  - Check dmesg for details"
+  echo "  - Consider upgrading to a kernel flavor that ships the module"
+}
+
+main "$@"
 
 
 # Install the device tree compiler
