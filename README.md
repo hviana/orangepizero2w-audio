@@ -330,7 +330,24 @@ basename_without_ko() {
   echo "$base"
 }
 
-module_loaded()  { lsmod | awk -v p="$1" 'BEGIN{IGNORECASE=1} $1~p{print; exit}' >/dev/null; }
+module_loaded() {
+  local name="$1"
+  [[ -r /proc/modules ]] || return 1
+  awk -v m="$name" 'BEGIN{ok=1} $1==m {ok=0; exit} END{exit ok}' /proc/modules
+}
+
+# Any loaded module whose name CONTAINS the given pattern (case-insensitive)?
+# Prints the first match and returns 0 if found; prints nothing and returns 1 otherwise.
+any_loaded_matching() {
+  local pattern="$1"
+  local q="${pattern,,}"
+  [[ -r /proc/modules ]] || return 1
+  awk -v q="$q" '
+    { n=tolower($1); if (index(n,q)>0) { print $1; exit 0 } }
+    END{ exit 1 }
+  ' /proc/modules
+}
+
 module_present() { modinfo "$1" >/dev/null 2>&1; }
 
 pick_module_names_ranked() {
@@ -356,24 +373,16 @@ pick_module_names_ranked() {
   rank_by_similarity "$target" "${uniq[@]}"
 }
 
-any_loaded_matching() {
-  local pattern="$1"
-  local name
-  name="$(lsmod | awk -v p="$pattern" 'BEGIN{IGNORECASE=1} $1~p{print $1; exit}')"
-  [[ -n "$name" ]] && { echo "$name"; return 0; }
-  return 1
-}
-
 load_or_install_module_iterative() {
   local pattern="$1"
 
   echo; echo "== Handling module pattern: '$pattern' =="
   # Early exit if something matching is already loaded
-  if any_loaded_matching "$pattern" >/dev/null; then
-    local loaded; loaded="$(any_loaded_matching "$pattern")"
-    echo "A matching module is already loaded: $loaded"
-    return 0
-  fi
+	local loaded=""
+	if loaded="$(any_loaded_matching "$pattern")"; then
+	  echo "A matching module is already loaded: $loaded"
+	  return 0
+	fi
 
   local cand
   if mapfile -t cand < <(pick_module_names_ranked "$pattern"); then
