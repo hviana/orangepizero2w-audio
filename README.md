@@ -143,6 +143,7 @@ _EOF_
 #install AHUB (kernel 6.16.8+)
 #!/bin/bash
 # Script to automatically install the ahub kernel module using DKMS on Debian
+# Detects correct linux-headers package name for custom/edge kernels.
 
 # --- Configuration ---
 MODULE_NAME="ahub"
@@ -158,37 +159,56 @@ fi
 
 echo "🚀 Starting automatic DKMS installation for the '$MODULE_NAME' module..."
 echo "Module Source Directory: $SOURCE_DIR"
+echo "Running Kernel: $(uname -r)"
 
-# --- 1. Install Dependencies ---
-echo "⚙️  1. Installing necessary dependencies (dkms, build-essential, kernel headers)..."
-# The linux-headers package ensures we can build against the current kernel
+# --- 1. Detect and Install Headers ---
+echo "⚙️  1. Detecting and installing necessary dependencies (dkms, build-essential)..."
 apt update
-apt install -y dkms build-essential "linux-headers-$(uname -r)"
+apt install -y dkms build-essential
+
+# 1.1 Extract core kernel version and architecture
+# Example: 6.16.8-edge-sunxi64 -> 6.16 (or 6.16.8), and -arm64 (or sunxi64)
+CURRENT_KERNEL_VER=$(uname -r | cut -d'-' -f1) # Extracts 6.16.8 (or similar)
+KERNEL_ARCH=$(dpkg --print-architecture)      # Extracts the architecture (e.g., arm64)
+
+# 1.2 Search for the correct package name
+echo "🔍 Searching for the correct linux-headers package for version $CURRENT_KERNEL_VER..."
+# Searches for packages containing 'linux-headers' and the current major/minor version (e.g., 6.16)
+HEADER_PACKAGE=$(apt-cache search "linux-headers-$CURRENT_KERNEL_VER" | grep "linux-headers" | grep "$KERNEL_ARCH" | awk '{print $1}' | head -n 1)
+
+if [ -z "$HEADER_PACKAGE" ]; then
+    echo "⚠️  Warning: Could not find an exact match ($CURRENT_KERNEL_VER-$KERNEL_ARCH)."
+    # Fallback: Search just by major version (e.g., 6.16) and architecture, accepting the first result
+    HEADER_PACKAGE=$(apt-cache search "linux-headers-$CURRENT_KERNEL_VER" | grep "linux-headers" | awk '{print $1}' | head -n 1)
+fi
+
+if [ -z "$HEADER_PACKAGE" ]; then
+    echo "❌ Error: Failed to find any suitable 'linux-headers' package in the repositories."
+    echo "   Please manually verify the package name in 'apt-cache search linux-headers' and run the install command."
+    exit 1
+fi
+
+echo "✅ Found header package: **$HEADER_PACKAGE**"
+echo "   Installing headers..."
+
+# 1.3 Install the detected headers
+apt install -y "$HEADER_PACKAGE"
 
 if [ $? -ne 0 ]; then
-  echo "❌ Error: Failed to install required packages. Aborting."
+  echo "❌ Error: Failed to install the detected headers package ($HEADER_PACKAGE). Aborting."
   exit 1
 fi
 
 # --- 2. Check Source Directory and dkms.conf ---
 if [ ! -d "$SOURCE_DIR" ]; then
   echo "❌ Error: Module source directory not found at $SOURCE_DIR"
-  echo "   Please ensure the path is correct and the source code is present."
+  echo "   Please ensure the path is correct and the source code (including dkms.conf) is present."
   exit 1
 fi
 
 if [ ! -f "$SOURCE_DIR/dkms.conf" ]; then
-  echo "⚠️  Warning: dkms.conf not found in the source directory."
-  echo "   You must create a dkms.conf file in $SOURCE_DIR for DKMS to work."
-  echo "   *** The script will now exit. Please create the dkms.conf and rerun. ***"
-  # Example dkms.conf content (you'll need to adapt it):
-  # PACKAGE_NAME="$MODULE_NAME"
-  # PACKAGE_VERSION="$MODULE_VERSION"
-  # MAKE="'make'"
-  # BUILT_MODULE_NAME="ahub"
-  # BUILT_MODULE_LOCATION=""
-  # DEST_MODULE_LOCATION="/kernel/drivers/sound/ahub" # Adjust path as needed
-  # AUTOINSTALL="yes"
+  echo "❌ Error: **dkms.conf** not found in the source directory."
+  echo "   You must create a dkms.conf file in $SOURCE_DIR for DKMS to work. Aborting."
   exit 1
 fi
 
@@ -198,17 +218,10 @@ echo "📂 2. Copying source to DKMS tree: $DKMS_TREE"
 rm -rf "$DKMS_TREE" # Clean up previous attempts/versions
 mkdir -p "$DKMS_TREE"
 cp -r "$SOURCE_DIR"/* "$DKMS_TREE"/
-# Optional: Ensure permissions are correct
-chmod -R 755 "$DKMS_TREE"
 
 # --- 4. Add Module to DKMS ---
 echo "➕ 3. Adding module to DKMS"
 dkms add "$MODULE_NAME/$MODULE_VERSION"
-
-if [ $? -ne 0 ]; then
-  echo "❌ Error: Failed to add module to DKMS. Aborting."
-  exit 1
-fi
 
 # --- 5. Build Module ---
 echo "🔨 4. Building the kernel module"
@@ -236,10 +249,9 @@ echo "🔍 7. Verifying installation..."
 if lsmod | grep -q "$MODULE_NAME"; then
   echo "🎉 **SUCCESS!** The '$MODULE_NAME' module is loaded and installed via DKMS."
   echo "   It will be automatically rebuilt for future kernel updates."
-  echo "   Check: lsmod | grep $MODULE_NAME"
 else
   echo "⚠️  Warning: Module installation finished, but it is not currently loaded."
-  echo "   Check dmesg for potential errors."
+  echo "   Check 'dmesg' for potential errors."
 fi
 
 echo "---"
