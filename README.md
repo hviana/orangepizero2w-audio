@@ -1,5 +1,5 @@
 # enable orangepi zero 2w audio and gpu
-(Thanks to Totof in https://dietpi.com/forum/t/orange-pi-zero-2w-with-dietpi-no-sound-device/22264/5)
+(Thanks to Totof in https://dietpi.com/forum/t/no-sound-card-detected-for-opi-zero-2w/20133/89)
 compile:
 ```bash
 # Create the directory for user overlays
