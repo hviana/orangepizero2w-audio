@@ -146,14 +146,14 @@ _EOF_
 #install AHUB
 
 # ===================== USER-CONFIGURABLE SECTION ==========================
-# You can target more than one module "family" by adding patterns here.
-# The script will try to find, load, or DKMS-build a good match for each.
-WANTED_MODULE_PATTERNS=( "ahub" )
+# Define the modules you want. These are PATTERNS (e.g., "ahub", "v4l2", "r8152").
+MODULE_PATTERNS=( "ahub" )
 
-# Optional hints to bias module selection if multiple *.ko exist.
+# Optional global hints to bias selection when multiple module names exist.
+# You can freely add unrelated names; the script ranks them anyway.
 MODULE_NAME_HINTS=( "snd-soc-sun8i-ahub" "snd-soc-sunxi-ahub" "sun8i-ahub" "sun50i-ahub" )
 
-# Extra build tools that help with DKMS fallback:
+# Extra build tools for DKMS fallback:
 BUILD_DEPS=( dkms build-essential bc flex bison libssl-dev libelf-dev dwarves )
 # ==========================================================================
 
@@ -167,11 +167,17 @@ require_root() {
 have() { command -v "$1" >/dev/null 2>&1; }
 die()  { echo "Error: $*" >&2; exit 1; }
 
-ask_yn() {
+ask_choice() {
+  # ask_choice "Prompt" [default=Y] -> prints: yes | next | cancel
   local prompt="$1" default="${2:-Y}" ans
-  read -r -p "$prompt [${default}/n] " ans || true
+  read -r -p "$prompt [Y]es/[n]ext/[c]ancel (default: ${default}) " ans || true
   ans=${ans:-$default}
-  [[ $ans =~ ^[Yy]$ ]]
+  case "${ans,,}" in
+    y|yes) echo "yes" ;;
+    n|no|next) echo "next" ;;
+    c|cancel|q|quit) echo "cancel" ;;
+    *) echo "next" ;;
+  esac
 }
 
 # --------- Pure-bash similarity: Levenshtein + prefix bonus + length gap -----
@@ -193,7 +199,6 @@ levenshtein() {
     for ((j=1;j<=len2;j++)); do
       local cost
       if [[ ${s1:i-1:1} == "${s2:j-1:1}" ]]; then cost=0; else cost=1; fi
-      # del/ins/sub
       local del=$(( prev[j] + 1 ))
       local ins=$(( curr[j-1] + 1 ))
       local sub=$(( prev[j-1] + cost ))
@@ -207,21 +212,23 @@ levenshtein() {
 
   local -i dist=${prev[len2]}
   local -i len_gap=$(( len1 > len2 ? len1 - len2 : len2 - len1 ))
-  # final score: smaller is better
-  echo $(( dist + (len_gap/2) - p ))
+  echo $(( dist + (len_gap/2) - p ))  # smaller is better
+}
+
+rank_by_similarity() {
+  # rank_by_similarity <target> <items...>
+  local target="$1"; shift
+  local item score
+  for item in "$@"; do
+    [[ -n "$item" ]] || continue
+    score=$(levenshtein "$target" "$item")
+    printf "%s\t%s\n" "$score" "$item"
+  done | sort -n -k1,1 | cut -f2-
 }
 
 best_of_list() {
-  # args: <target-string> <list...>
   local target="$1"; shift
-  local best="" best_score=999999 item score
-  for item in "$@"; do
-    score=$(levenshtein "$target" "$item")
-    if (( score < best_score )); then
-      best="$item"; best_score=$score
-    fi
-  done
-  [[ -n $best ]] && echo "$best" || true
+  rank_by_similarity "$target" "$@" | head -n1
 }
 
 kernel_rel() { uname -r; }
@@ -229,7 +236,6 @@ kernel_rel() { uname -r; }
 hardware_signature() {
   local s="" a=""
   if [[ -r /proc/device-tree/model ]]; then
-    # remove embedded NULs
     s="$(tr -d '\0' </proc/device-tree/model 2>/dev/null || true)"
   fi
   for f in /sys/devices/virtual/dmi/id/{board_vendor,board_name,product_name,sys_vendor}; do
@@ -237,32 +243,18 @@ hardware_signature() {
   done
   a+=" $(uname -m) $(uname -s)"
   s="${s:-$a}"
-  echo "${s,,}"  # lowercase
+  echo "${s,,}"  # lowercase fingerprint
 }
 
 # --------------------- Headers discovery & install --------------------------
-find_header_pkg() {
-  local kr; kr="$(kernel_rel)"
-  local -a pkgs=()
-  mapfile -t pkgs < <(apt-cache --names-only search '^linux-headers-' 2>/dev/null \
+find_header_pkgs() {
+  mapfile -t _pkgs < <(apt-cache --names-only search '^linux-headers-' 2>/dev/null \
     | while read -r name _; do [[ $name == linux-headers-* ]] && echo "$name"; done)
-
-  # fallback: /usr/src
-  if ((${#pkgs[@]}==0)); then
-    for d in /usr/src/linux-headers-*; do [[ -d $d ]] && pkgs+=("$(basename "$d")"); done
+  if ((${#_pkgs[@]}==0)); then
+    for d in /usr/src/linux-headers-*; do [[ -d $d ]] && _pkgs+=("$(basename "$d")"); done
   fi
-  ((${#pkgs[@]})) || die "No linux-headers packages found."
-
-  local suffix scoresel sel
-  # score against the suffix after linux-headers-
-  local -a suffixes=()
-  for sel in "${pkgs[@]}"; do suffixes+=( "${sel#linux-headers-}" ); done
-  scoresel=$(best_of_list "$kr" "${suffixes[@]}")
-  for sel in "${pkgs[@]}"; do
-    if [[ ${sel#linux-headers-} == "$scoresel" ]]; then
-      echo "$sel"; return 0
-    fi
-  done
+  ((${#_pkgs[@]})) || return 1
+  printf "%s\n" "${_pkgs[@]}"
 }
 
 install_pkg_if_needed() {
@@ -276,39 +268,56 @@ install_pkg_if_needed() {
   fi
 }
 
-ensure_headers() {
-  local kr hdr hdr_ok=0
+choose_header_pkg_iteratively() {
+  local kr hdr candidates suffix ranked pkg
   kr="$(kernel_rel)"
   echo "Running kernel: $kr"
-  echo "Selecting best-matching linux headers (pure-bash similarity)..."
-  hdr="$(find_header_pkg)" || die "Could not determine headers package."
-  echo "Suggested headers package: $hdr"
-  if ask_yn "Install this header for \"$kr\"?"; then
-    install_pkg_if_needed "$hdr"
-    hdr_ok=1
-  else
-    echo "Please install the correct headers for your kernel (exact match to $(uname -r)) and re-run if needed."
-  fi
+  echo "Collecting candidate linux-headers packages..."
+  mapfile -t candidates < <(find_header_pkgs) || return 1
 
-# Try modules-extra with same suffix if it exists
-local suffix
-suffix="${hdr#linux-headers-}"
+  # build suffix list
+  mapfile -t suffix < <(for pkg in "${candidates[@]}"; do echo "${pkg#linux-headers-}"; done | uniq)
 
-local extra
-extra="linux-modules-extra-$suffix"
+  # rank suffixes by similarity to uname -r, then map back to pkg names per step
+  mapfile -t ranked < <(rank_by_similarity "$kr" "${suffix[@]}")
 
-if apt-cache policy "$extra" 2>/dev/null | grep -q 'Candidate:'; then
-  install_pkg_if_needed "$extra" || true
-fi
+  local s
+  for s in "${ranked[@]}"; do
+    for pkg in "${candidates[@]}"; do
+      if [[ ${pkg#linux-headers-} == "$s" ]]; then
+        echo
+        echo "Suggested headers package: $pkg"
+        case "$(ask_choice 'Install this header?')" in
+          yes)
+            install_pkg_if_needed "$pkg"
 
-  ((hdr_ok)) || true
+            # Try modules-extra with same suffix if it exists
+            local extra
+            extra="linux-modules-extra-$s"
+            if apt-cache policy "$extra" 2>/dev/null | grep -q 'Candidate:'; then
+              install_pkg_if_needed "$extra" || true
+            fi
+            echo "$pkg"
+            return 0
+            ;;
+          cancel)
+            echo "Header selection cancelled by user."
+            return 2
+            ;;
+          next) ;; # try next suggestion
+        esac
+      fi
+    done
+  done
+
+  echo "No header selected. Skipping header installation."
+  return 3
 }
 
 # --------------------- Module discovery / loading ---------------------------
 list_module_files_for_pattern() {
   local pattern="$1"
   local kr; kr="$(kernel_rel)"
-  # Find candidate *.ko files under /lib/modules/<kr>
   find "/lib/modules/$kr" -type f -name "*${pattern,,}*.ko*" -printf "%f\n" 2>/dev/null | sort -u || true
 }
 
@@ -321,21 +330,18 @@ basename_without_ko() {
   echo "$base"
 }
 
-module_loaded() { lsmod | grep -qw -- "$1"; }
+module_loaded()  { lsmod | awk -v p="$1" 'BEGIN{IGNORECASE=1} $1~p{print; exit}' >/dev/null; }
 module_present() { modinfo "$1" >/dev/null 2>&1; }
 
-pick_best_module_name() {
+pick_module_names_ranked() {
   local pattern="$1"
   local hw; hw="$(hardware_signature)"
   local kr; kr="$(kernel_rel)"
 
-  # Candidates from filesystem
   mapfile -t files < <(list_module_files_for_pattern "$pattern")
   local -a names=()
   local f
   for f in "${files[@]}"; do names+=( "$(basename_without_ko "$f")" ); done
-
-  # Add hints (they may or may not exist; best_of_list will still consider them)
   names+=( "${MODULE_NAME_HINTS[@]}" )
 
   # Dedup
@@ -347,49 +353,68 @@ pick_best_module_name() {
   ((${#uniq[@]})) || return 1
 
   local target="${hw} ${kr} ${pattern,,}"
-  best_of_list "$target" "${uniq[@]}"
+  rank_by_similarity "$target" "${uniq[@]}"
 }
 
-load_or_install_module() {
-  local want_pattern="$1"
+any_loaded_matching() {
+  local pattern="$1"
+  local name
+  name="$(lsmod | awk -v p="$pattern" 'BEGIN{IGNORECASE=1} $1~p{print $1; exit}')"
+  [[ -n "$name" ]] && { echo "$name"; return 0; }
+  return 1
+}
 
-  echo; echo "== Handling module pattern: '$want_pattern' =="
-  local best
-  best="$(pick_best_module_name "$want_pattern" || true)"
+load_or_install_module_iterative() {
+  local pattern="$1"
 
-  if [[ -n $best ]]; then
-    echo "Best match for hardware: $best"
-    if ask_yn "Use module '$best'?"; then
-      if module_loaded "$best"; then
-        echo "Module '$best' already loaded."
-        return 0
-      fi
-      if module_present "$best"; then
-        echo "Attempting to load '$best'..."
-        if modprobe "$best"; then
-          echo "Loaded '$best' successfully ✅"
-          return 0
-        else
-          echo "modprobe failed for '$best' (will attempt DKMS fallback)."
-        fi
-      else
-        echo "Module '$best' not present on disk (will attempt DKMS fallback)."
-      fi
-    else
-      echo "User declined '$best'."
-      # If user declines, we won't second-guess—try DKMS if nothing else exists.
-    fi
-  else
-    echo "No candidate module file found for pattern '$want_pattern'."
+  echo; echo "== Handling module pattern: '$pattern' =="
+  # Early exit if something matching is already loaded
+  if any_loaded_matching "$pattern" >/dev/null; then
+    local loaded; loaded="$(any_loaded_matching "$pattern")"
+    echo "A matching module is already loaded: $loaded"
+    return 0
   fi
 
-  echo "Falling back to DKMS build attempt for pattern '$want_pattern'..."
-  dkms_build_ahub "$want_pattern"
+  local cand
+  if mapfile -t cand < <(pick_module_names_ranked "$pattern"); then
+    local name
+    for name in "${cand[@]}"; do
+      [[ -n "$name" ]] || continue
+      echo
+      echo "Suggested module: $name"
+      case "$(ask_choice 'Use this module?')" in
+        yes)
+          if module_loaded "$name"; then
+            echo "Module '$name' already loaded."
+            return 0
+          fi
+          if module_present "$name"; then
+            echo "Attempting to load '$name'..."
+            if modprobe "$name"; then
+              echo "Loaded '$name' successfully ✅"
+              return 0
+            else
+              echo "modprobe failed for '$name'."
+            fi
+          else
+            echo "Module '$name' not present on disk."
+          fi
+          ;;
+        cancel)
+          echo "Module selection cancelled by user."
+          return 2
+          ;;
+        next) ;; # try next suggestion
+      esac
+    done
+  fi
+
+  echo "Falling back to DKMS build attempt for pattern '$pattern'..."
+  dkms_build_module "$pattern"
 }
 
-# --------------------------- DKMS fallback ----------------------------------
+# --------------------------- DKMS fallback (generic) ------------------------
 choose_linux_source_tarball() {
-  # Pick the linux-source tarball that best matches uname -r
   local -a tars=()
   shopt -s nullglob
   for t in /usr/src/linux-source-*.tar.*; do tars+=( "$(basename "$t")" ); done
@@ -404,7 +429,6 @@ ensure_linux_source() {
   if ! choose_linux_source_tarball >/dev/null 2>&1; then
     echo "No linux-source tarball found under /usr/src; trying to install..."
     apt-get update -y
-    # Install generic 'linux-source' meta (creates /usr/src/linux-source-*.tar.xz)
     DEBIAN_FRONTEND=noninteractive apt-get install -y linux-source || true
   fi
   choose_linux_source_tarball || return 1
@@ -426,7 +450,7 @@ extract_linux_source_if_needed() {
   echo "$dir"
 }
 
-dkms_build_ahub() {
+dkms_build_module() {
   local pattern="$1"
   local kr; kr="$(kernel_rel)"
 
@@ -434,7 +458,7 @@ dkms_build_ahub() {
   apt-get update -y
   DEBIAN_FRONTEND=noninteractive apt-get install -y "${BUILD_DEPS[@]}"
 
-  # Ensure headers are present (in case we skipped earlier)
+  # Ensure headers (best-effort exact)
   install_pkg_if_needed "linux-headers-$(kernel_rel)" || true
 
   local tarball
@@ -447,30 +471,34 @@ dkms_build_ahub() {
   local srcdir
   srcdir="$(extract_linux_source_if_needed "$tarball")"
 
-  # Find AHUB driver sources in kernel tree (common locations)
-  local cand
-  cand="$(cd "$srcdir" && { \
-    find sound -type f -iname '*ahub*.c' -print 2>/dev/null \
-    | head -n1; } || true)"
-  if [[ -z $cand ]]; then
-    echo "Could not locate an '*ahub*.c' inside $srcdir."
+  # Find a plausible driver source file generically (prefer common driver trees)
+  local relc
+  relc="$(cd "$srcdir" && { \
+    find drivers sound net crypto fs -type f -iname "*${pattern}*.c" -print 2>/dev/null \
+    | sort | head -n1; } || true)"
+  if [[ -z $relc ]]; then
+    echo "Could not locate a '*${pattern}*.c' inside $srcdir."
     return 2
   fi
-  local drvdir="$srcdir/$(dirname "$cand")"
-  local drvbase="$(basename "${cand%.c}")"   # e.g. sun8i-ahub
+
+  local drvdir="$srcdir/$(dirname "$relc")"
+  local drvbase="$(basename "${relc%.c}")"
   local kmake="$drvdir/Makefile"
 
-  # Try to infer final module ko basename from the Kbuild (e.g. snd-soc-sun8i-ahub)
+  # Try to infer module name from Makefile; else default to file basename
   local modko="$drvbase"
   if [[ -f $kmake ]]; then
-    # Look for "*-objs := ... ahub.o" lines and capture the left side (module basename)
+    # 1) Look for '<mod>-objs := ... <drvbase>.o' or '<mod>-y :=' lines
     local line
-    line="$(grep -iE 'ahub[^:]*-objs|ahub[^:]*-y' "$kmake" | head -n1 || true)"
+    line="$(grep -E "^[[:alnum:]_+-]+-(objs|y)[[:space:]]*:[=].*\\b${drvbase}\\.o\\b" "$kmake" | head -n1 || true)"
     if [[ -n $line ]]; then
-      modko="$(echo "$line" | sed -E 's/[[:space:]]*[:-][^:]*[:=].*$//; s/[[:space:]]+//g')"
-      # Example: "snd-soc-sun8i-ahub-objs" -> "snd-soc-sun8i-ahub"
-      modko="${modko%-objs}"
-      modko="${modko%-y}"
+      modko="$(sed -E 's/^[[:space:]]*([[:alnum:]_+.-]+)-(objs|y).*/\1/i' <<<"$line")"
+    else
+      # 2) Try 'obj-$(CONFIG_...) += <mod>.o' lines that include basename
+      line="$(grep -E "obj-[^+]*\\+=.*\\b${drvbase}\\.o\\b" "$kmake" | head -n1 || true)"
+      if [[ -n $line ]]; then
+        modko="$(sed -E 's/.*\+=\s*([[:alnum:]_+.-]+)\.o.*/\1/' <<<"$line")"
+      fi
     fi
   fi
 
@@ -482,16 +510,13 @@ dkms_build_ahub() {
   rm -rf "$dkms_root"
   mkdir -p "$dkms_root/build"
 
-  # Copy driver directory (safer than a single .c; keeps local headers/Makefile)
+  # Copy the driver directory (keeps local headers and Makefile if needed)
   (cd "$drvdir/.." && tar -cf - "$(basename "$drvdir")") | (cd "$dkms_root/build" && tar -xf -)
 
-  # Minimal Kbuild to build only this module from the copied tree
+  # Minimal Kbuild (generic)
   cat >"$dkms_root/build/Makefile" <<EOF
 # Auto-generated DKMS Kbuild
 obj-m := ${modko}.o
-# Try to reuse Kbuild recipe if present; else default to a simple mapping
-# If upstream's Makefile defines ${modko}-objs or -y, include it;
-# otherwise assume single-object module from ${drvbase}.o
 ${modko}-y := ${drvbase}.o
 ccflags-y += -Wno-error
 EOF
@@ -533,13 +558,13 @@ EOF
 main() {
   require_root "$@"
 
-  # 1) Headers: pick best by similarity and ask for confirmation
-  ensure_headers || true
+  # 1) Headers: iteratively suggest best candidates; allow next/cancel
+  choose_header_pkg_iteratively || true
 
-  # 2) For each requested module pattern: find best candidate, confirm, load; else DKMS
+  # 2) For each requested module pattern: iteratively suggest best module names; allow next/cancel
   local pat
-  for pat in "${WANTED_MODULE_PATTERNS[@]}"; do
-    load_or_install_module "$pat" || true
+  for pat in "${MODULE_PATTERNS[@]}"; do
+    load_or_install_module_iterative "$pat" || true
   done
 
   echo
@@ -550,6 +575,7 @@ main() {
 }
 
 main "$@"
+
 
 
 # Install the device tree compiler
