@@ -4,6 +4,9 @@ compile:
 ```bash
 #!/usr/bin/env bash
 
+set -euo pipefail
+[[ $EUID -eq 0 ]] || { echo "Run as root (sudo)"; exit 1; }
+
 # Create the directory for user overlays
 # Create the overlay source file
 cat << '_EOF_' > sun50i-h616-audiogpu.dts
@@ -155,7 +158,7 @@ cat << '_EOF_' > sun50i-h616-audiogpu.dts
 _EOF_
 
 # Install the device tree compiler
-apt install device-tree-compiler
+apt install -y device-tree-compiler
 # Compile the overlay binary file
 dtc -@ -I dts -O dtb -o sun50i-h616-audiogpu.dtbo sun50i-h616-audiogpu.dts
 
