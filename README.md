@@ -158,7 +158,7 @@ cat << '_EOF_' > sun50i-h616-audiogpu.dts
 _EOF_
 
 # Install the device tree compiler
-apt install -y device-tree-compiler
+sudo apt install -y device-tree-compiler
 # Compile the overlay binary file
 dtc -@ -I dts -O dtb -o sun50i-h616-audiogpu.dtbo sun50i-h616-audiogpu.dts
 
