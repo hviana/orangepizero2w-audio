@@ -555,6 +555,6 @@ dtc -@ -I dts -O dtb -o sun50i-h616-audiogpu.dtbo sun50i-h616-audiogpu.dts
 #copy to overlays:
 sudo cp sun50i-h616-audiogpu.dtbo /boot/dtb/allwinner/overlay/
 
-#FINALLY, ENABLE audiogpu OVERLAY ON KERNEL CONFIG!
+echo "FINALLY, you MUST ENABLE audiogpu OVERLAY ON KERNEL CONFIG!"
 
 ```
