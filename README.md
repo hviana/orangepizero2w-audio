@@ -139,6 +139,114 @@ cat << '_EOF_' > sun50i-h616-audiogpu.dts
 	};
 };
 _EOF_
+
+#install AHUB (kernel 6.16.8+)
+#!/bin/bash
+# Script to automatically install the ahub kernel module using DKMS on Debian
+
+# --- Configuration ---
+MODULE_NAME="ahub"
+MODULE_VERSION="1.0" # Change to your module's version
+SOURCE_DIR="$HOME/ahub-module-source" # *** REPLACE WITH ACTUAL PATH TO AHUB SOURCE ***
+
+# --- Check for Root Privileges ---
+if [ "$EUID" -ne 0 ]; then
+  echo "❌ Error: This script must be run as root."
+  echo "   Please run with 'sudo ./install_ahub_dkms.sh'"
+  exit 1
+fi
+
+echo "🚀 Starting automatic DKMS installation for the '$MODULE_NAME' module..."
+echo "Module Source Directory: $SOURCE_DIR"
+
+# --- 1. Install Dependencies ---
+echo "⚙️  1. Installing necessary dependencies (dkms, build-essential, kernel headers)..."
+# The linux-headers package ensures we can build against the current kernel
+apt update
+apt install -y dkms build-essential "linux-headers-$(uname -r)"
+
+if [ $? -ne 0 ]; then
+  echo "❌ Error: Failed to install required packages. Aborting."
+  exit 1
+fi
+
+# --- 2. Check Source Directory and dkms.conf ---
+if [ ! -d "$SOURCE_DIR" ]; then
+  echo "❌ Error: Module source directory not found at $SOURCE_DIR"
+  echo "   Please ensure the path is correct and the source code is present."
+  exit 1
+fi
+
+if [ ! -f "$SOURCE_DIR/dkms.conf" ]; then
+  echo "⚠️  Warning: dkms.conf not found in the source directory."
+  echo "   You must create a dkms.conf file in $SOURCE_DIR for DKMS to work."
+  echo "   *** The script will now exit. Please create the dkms.conf and rerun. ***"
+  # Example dkms.conf content (you'll need to adapt it):
+  # PACKAGE_NAME="$MODULE_NAME"
+  # PACKAGE_VERSION="$MODULE_VERSION"
+  # MAKE="'make'"
+  # BUILT_MODULE_NAME="ahub"
+  # BUILT_MODULE_LOCATION=""
+  # DEST_MODULE_LOCATION="/kernel/drivers/sound/ahub" # Adjust path as needed
+  # AUTOINSTALL="yes"
+  exit 1
+fi
+
+# --- 3. Copy Source to DKMS Tree ---
+DKMS_TREE="/usr/src/$MODULE_NAME-$MODULE_VERSION"
+echo "📂 2. Copying source to DKMS tree: $DKMS_TREE"
+rm -rf "$DKMS_TREE" # Clean up previous attempts/versions
+mkdir -p "$DKMS_TREE"
+cp -r "$SOURCE_DIR"/* "$DKMS_TREE"/
+# Optional: Ensure permissions are correct
+chmod -R 755 "$DKMS_TREE"
+
+# --- 4. Add Module to DKMS ---
+echo "➕ 3. Adding module to DKMS"
+dkms add "$MODULE_NAME/$MODULE_VERSION"
+
+if [ $? -ne 0 ]; then
+  echo "❌ Error: Failed to add module to DKMS. Aborting."
+  exit 1
+fi
+
+# --- 5. Build Module ---
+echo "🔨 4. Building the kernel module"
+dkms build "$MODULE_NAME/$MODULE_VERSION"
+
+if [ $? -ne 0 ]; then
+  echo "❌ Error: Failed to build the module. Check your module source and Makefile."
+  exit 1
+fi
+
+# --- 6. Install Module ---
+echo "✅ 5. Installing the kernel module"
+dkms install "$MODULE_NAME/$MODULE_VERSION"
+
+if [ $? -ne 0 ]; then
+  echo "❌ Error: Failed to install the module. Aborting."
+  exit 1
+fi
+
+# --- 7. Load Module and Final Checks ---
+echo "🔌 6. Loading the module into the running kernel"
+modprobe "$MODULE_NAME"
+
+echo "🔍 7. Verifying installation..."
+if lsmod | grep -q "$MODULE_NAME"; then
+  echo "🎉 **SUCCESS!** The '$MODULE_NAME' module is loaded and installed via DKMS."
+  echo "   It will be automatically rebuilt for future kernel updates."
+  echo "   Check: lsmod | grep $MODULE_NAME"
+else
+  echo "⚠️  Warning: Module installation finished, but it is not currently loaded."
+  echo "   Check dmesg for potential errors."
+fi
+
+echo "---"
+echo "DKMS Status:"
+dkms status "$MODULE_NAME"
+
+
 # Install the device tree compiler
 apt install device-tree-compiler
 # Compile the overlay binary file
