@@ -169,9 +169,12 @@ echo "FINALLY, you MUST ENABLE audiogpu OVERLAY ON KERNEL CONFIG!"
 
 ```
 
-IN Armbian compilation, enable all in:
+# Enable **Allwinner SoC Audio support V2** options in Armbian compilation:
+
+~~~
 Device Drivers
   → Sound card support
     → Advanced Linux Sound Architecture
       → ALSA for SoC audio support
         → Allwinner SoC Audio support V2
+~~~
