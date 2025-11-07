@@ -168,3 +168,111 @@ sudo cp sun50i-h616-audiogpu.dtbo /boot/dtb/allwinner/overlay/
 echo "FINALLY, you MUST ENABLE audiogpu OVERLAY ON KERNEL CONFIG!"
 
 ```
+
+If you needs AHUB:
+```bash
+#!/usr/bin/env bash
+# ahub-split-mods-v2.sh — build ONLY the AHUB pieces from mainline+patch, robust init detection
+# Requires: exact headers at /lib/modules/$(uname -r)/build
+
+set -euo pipefail
+[ "$EUID" -eq 0 ] || { echo "Run as root (sudo)"; exit 1; }
+
+PATCH_URL="${PATCH_URL:-https://gitlab.manjaro.org/manjaro-arm/packages/core/linux-rc/-/blob/master/0621-sound-soc-add-sunxi_v2-for-h616-ahub.patch?ref_type=heads}"
+KVER="$(uname -r)"
+KDIR="/lib/modules/${KVER}/build"
+DEST="/lib/modules/${KVER}/extra"
+CONF="/etc/modules-load.d/ahub.conf"
+
+[ -d "$KDIR" ] || { echo "Missing headers/build dir: $KDIR"; exit 1; }
+
+apt-get update -y >/dev/null 2>&1 || true
+apt-get install -y --no-install-recommends git curl patch build-essential >/dev/null
+
+WORK="/usr/local/src/ahub-split"
+rm -rf "$WORK"; mkdir -p "$WORK"; cd "$WORK"
+
+# 1) mainline + patch
+git clone --depth 1 https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git mainline
+cd mainline
+RAW_URL="$(printf '%s' "$PATCH_URL" | sed -E 's@/-/blob/@/-/raw/@')"
+curl -fsSL "$RAW_URL" -o ahub.patch
+git apply --whitespace=nowarn ahub.patch || patch -p1 --forward < ahub.patch || patch -p0 --forward < ahub.patch
+
+# 2) locate AHUB dir
+AHUBDIR=""
+for d in sound/soc/sunxi_v2 sound/soc/sunxi; do
+  if [ -d "$d" ] && find "$d" -maxdepth 1 -type f -name '*ahub*.c' | grep -q .; then
+    AHUBDIR="$PWD/$d"; break
+  fi
+done
+[ -n "$AHUBDIR" ] || { echo "Patch applied, but no AHUB sources found."; exit 1; }
+cd "$AHUBDIR"
+
+# 3) detect init-bearing sources (many drivers use macros, not module_init)
+mapfile -t ALL_C < <(ls -1 *.c 2>/dev/null | sort)
+PATTERN='module_init\(|module_exit\(|module_platform_driver\(|module_spi_driver\(|module_i2c_driver\(|subsys_initcall\(|builtin_platform_driver\('
+mapfile -t INIT_C < <(grep -El "$PATTERN" -- *.c 2>/dev/null | sort || true)
+
+# Fallback to well-known filenames if grep found nothing
+if [ "${#INIT_C[@]}" -eq 0 ]; then
+  for guess in snd_sunxi_ahub.c snd_sunxi_ahub_dam.c snd_sunxi_mach.c; do
+    [ -f "$guess" ] && INIT_C+=("$guess")
+  done
+fi
+# Last-resort: pick the biggest 1–3 files (likely to contain init code)
+if [ "${#INIT_C[@]}" -eq 0 ]; then
+  mapfile -t INIT_C < <(ls -1S *.c | head -n 3)
+fi
+
+# helpers = ALL - INIT
+HELPERS=()
+for f in "${ALL_C[@]}"; do
+  skip=0; for g in "${INIT_C[@]}"; do [[ "$f" == "$g" ]] && { skip=1; break; }; done
+  [[ $skip -eq 0 ]] && HELPERS+=("$f")
+done
+
+# 4) Makefile: one module per init-file, each linked with all helpers (avoids multiple init symbol clashes)
+mv -f Makefile Makefile.bak.ahub 2>/dev/null || true
+{
+  echo -n "obj-m :="
+  for init in "${INIT_C[@]}"; do
+    base="${init%.c}"
+    echo -n " ${base}.o"
+  done
+  echo
+  for init in "${INIT_C[@]}"; do
+    base="${init%.c}"
+    echo -n "${base}-objs := ${base}.o"
+    for h in "${HELPERS[@]}"; do
+      echo -n " ${h%.c}.o"
+    done
+    echo
+  done
+} > Makefile
+
+echo "Building AHUB modules from: $(basename "$AHUBDIR")"
+make -C "$KDIR" M="$AHUBDIR" -j"$(nproc)" modules
+
+# 5) install + depmod
+mkdir -p "$DEST"
+built=( $(find "$AHUBDIR" -maxdepth 1 -type f -name '*.ko' -printf '%f\n') )
+[ "${#built[@]}" -gt 0 ] || { echo "No .ko produced (headers/ABI mismatch?)."; exit 1; }
+for ko in "${built[@]}"; do
+  cp -f "$AHUBDIR/$ko" "$DEST/"
+done
+command -v depmod >/dev/null 2>&1 && depmod "$KVER" || true
+
+# 6) autoload the likely core modules (idempotent)
+touch "$CONF"
+for name in snd_sunxi_ahub snd_sunxi_ahub_dam snd_sunxi_mach; do
+  grep -qx "$name" "$CONF" 2>/dev/null || echo "$name" >> "$CONF"
+done
+
+echo "Done ✅
+• Installed to: $DEST
+• Built modules: ${built[*]}
+• Autoload list: $(tr '\n' ' ' < "$CONF")
+Reboot, then check:  lsmod | grep -E 'sunxi|ahub'  &&  dmesg | grep -i ahub"
+
+```
