@@ -169,5 +169,9 @@ echo "FINALLY, you MUST ENABLE audiogpu OVERLAY ON KERNEL CONFIG!"
 
 ```
 
-If you needs AHUB:
-In armbian compilation enable all in: Device Drivers > Sound card support > Advanced Linux Sound Architecture -> ALSA for SoC audio support -> Allwinner SoC Audio support V2 
+IN Armbian compilation, enable all in:
+Device Drivers
+  → Sound card support
+    → Advanced Linux Sound Architecture
+      → ALSA for SoC audio support
+        → Allwinner SoC Audio support V2
