@@ -177,7 +177,7 @@ Device Drivers
     → Advanced Linux Sound Architecture
       → ALSA for SoC audio support
         → Allwinner SoC Audio support V2
-			→ Allwinner AAUDIO support
-			→ Allwinner AHUB Support
+			→ Allwinner AAUDIO support -> if you use analog audio
+			→ Allwinner AHUB Support -> if you use hdmi/digital audio
 
 ~~~
