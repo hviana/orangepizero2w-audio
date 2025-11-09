@@ -159,7 +159,7 @@ echo "FINALLY, you MUST ENABLE audiogpu OVERLAY ON KERNEL CONFIG!"
 
 # Games to run:
 ```bash
-sudo apt install -y supertux frozen-bubble freedoom openarena redeclipse minetest minetest-data
+sudo apt install -y supertux frozen-bubble freedoom openarena redeclipse minetest minetest-data supertuxkart torcs
 ```
 
 # Enable **Allwinner SoC Audio support V2** options in Armbian compilation with (*):
