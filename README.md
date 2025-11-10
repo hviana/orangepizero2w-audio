@@ -190,3 +190,6 @@ Device Drivers ──►
   [*] User-space I/O driver support ──►
       [*] User level driver support (UHID)  (CONFIG_UHID)
 ~~~
+```bash
+printf "hid_playstation\njoydev\nuhid\n" | sudo tee /etc/modules-load.d/sony.conf
+```
