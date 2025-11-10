@@ -193,3 +193,7 @@ Device Drivers ──►
 ```bash
 printf "hid_playstation\njoydev\nuhid\nhidraw\n" | sudo tee /etc/modules-load.d/sony.conf
 ```
+if BRLTTY conflict:
+```bash
+sudo apt purge -y brltty
+```
