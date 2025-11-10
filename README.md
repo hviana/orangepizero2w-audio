@@ -181,7 +181,6 @@ Device Drivers
     [*] HIDRAW support                      (CONFIG_HIDRAW)
     Special HID drivers ──►
       <M> PlayStation HID Driver            (CONFIG_HID_PLAYSTATION)
-      <M> Sony PS HID Driver (legacy)       (CONFIG_HID_SONY)   ← keep for PS3/Sixaxis & some clones
 
 Input device support ──►
   [*] Joystick interface                    (CONFIG_INPUT_JOYDEV)
