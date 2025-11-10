@@ -174,7 +174,7 @@ Device Drivers
 			→ Allwinner AHUB Support -> if you use hdmi/digital audio
 
 ~~~
-# ps4 joystick
+# ps4/5 joystick
 ~~~
 Device Drivers
   HID bus support ──►
