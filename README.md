@@ -335,3 +335,124 @@ echo " - For USB: plug in the controller; it should load 'hid_sony' and create /
 echo " - For Bluetooth: put controller in pairing mode (SHARE+PS), then pair via 'bluetoothctl'."
 echo " - Test: 'jstest /dev/input/js0' (from 'joystick' package) or 'evtest' on the matching event node."
 ```
+
+install hid_playstation module
+```bash
+#!/usr/bin/env bash
+# Build & install hid_playstation from MAINLINE source for the CURRENT kernel,
+# without installing distro kernel-headers (we self-prepare a local source tree).
+# Works on Debian/Armbian. Requires network access.
+
+set -Eeuo pipefail
+
+need_root() { [ "$(id -u)" -eq 0 ] || exec sudo -E bash "$0" "$@"; }
+need_root "$@"
+
+KVER="$(uname -r)"                               # e.g. 6.12.47-sunxi64
+KMAJMIN="$(echo "$KVER" | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')"   # e.g. 6.12
+KPATCH="$(echo "$KVER" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/')" # e.g. 6.12.47
+KSFX="$(echo "$KVER" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+(.*)$/\1/')"  # e.g. -sunxi64 or empty
+
+WORK="/usr/local/src/hid-playstation-build"
+KSRC="${WORK}/linux-src"          # prepared kernel source lives here
+MODDIR="${WORK}/hid-playstation"  # external module dir
+
+echo "[info] Kernel: $KVER  (base: $KPATCH  minor: $KMAJMIN  suffix: '$KSFX')"
+echo "[info] Creating workspace: $WORK"
+mkdir -p "$WORK" "$MODDIR"
+cd "$WORK"
+
+# 0) Fast-path: if module already exists, just autoload & exit
+if modinfo hid_playstation >/dev/null 2>&1; then
+  echo "[info] hid_playstation already present in this kernel. Enabling autoload…"
+  echo "hid_playstation" > /etc/modules-load.d/hid_playstation.conf
+  modprobe hid_playstation || true
+  echo "[done] Module loaded."
+  exit 0
+fi
+
+# 1) Minimal build tooling (no 'linux-headers-*' packages)
+echo "[info] Installing minimal build tools (no distro headers)…"
+apt-get update -y
+apt-get install -y --no-install-recommends \
+  git build-essential bc libelf-dev dwarves xz-utils ca-certificates curl
+
+# 2) Fetch MAINLINE kernel source matching your running version tag (best-effort)
+#    Try exact stable tag vX.Y.Z; if unavailable, fall back to vX.Y
+if [ ! -d "$KSRC" ]; then
+  echo "[info] Fetching mainline kernel source…"
+  set +e
+  git clone --depth 1 --branch "v${KPATCH}" https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git "$KSRC"
+  CLONE_RC=$?
+  if [ $CLONE_RC -ne 0 ]; then
+    echo "[warn] Tag v${KPATCH} not found, trying v${KMAJMIN}…"
+    git clone --depth 1 --branch "v${KMAJMIN}" https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git "$KSRC"
+  fi
+  set -e
+fi
+
+# 3) Seed the config from the running kernel
+cd "$KSRC"
+if [ -r /proc/config.gz ]; then
+  echo "[info] Using /proc/config.gz from running kernel"
+  zcat /proc/config.gz > .config
+elif [ -r "/boot/config-${KVER}" ]; then
+  echo "[info] Using /boot/config-${KVER}"
+  cp "/boot/config-${KVER}" .config
+else
+  echo "[error] No kernel config found (need /proc/config.gz or /boot/config-${KVER})."
+  exit 1
+fi
+
+# Ensure LOCALVERSION matches running kernel suffix, and disable auto suffixing
+# This aligns vermagic so the module will load cleanly.
+sed -i 's/^CONFIG_LOCALVERSION=.*/# CONFIG_LOCALVERSION is not set/' .config || true
+scripts/config --disable LOCALVERSION_AUTO || true
+if [ -n "$KSFX" ]; then
+  echo "CONFIG_LOCALVERSION=\"${KSFX}\"" >> .config
+fi
+
+echo "[info] Preparing kernel build headers locally (modules_prepare)…"
+make -s olddefconfig
+make -s modules_prepare
+
+# 4) Stage mainline hid-playstation sources for out-of-tree build
+cd "$MODDIR"
+echo "[info] Staging driver sources…"
+cp -f "${KSRC}/drivers/hid/hid-playstation.c" ./hid-playstation.c
+cp -f "${KSRC}/drivers/hid/hid-ids.h"         ./hid-ids.h
+
+cat > Makefile <<'EOF'
+# Build external module against prepared kernel source
+obj-m += hid-playstation.o
+KDIR ?= /lib/modules/$(shell uname -r)/build
+PWD  := $(shell pwd)
+
+# Include the in-tree drivers/hid private header (hid-ids.h) we copied locally
+# No EXTRA_CFLAGS needed since hid-ids.h is in our module dir.
+
+all:
+	$(MAKE) -C $(KDIR) M=$(PWD) modules
+install:
+	$(MAKE) -C $(KDIR) M=$(PWD) modules_install
+	depmod -a
+clean:
+	$(MAKE) -C $(KDIR) M=$(PWD) clean
+EOF
+
+# 5) Build the module using the *prepared* source tree (NOT distro headers)
+echo "[info] Building hid_playstation for ${KVER}…"
+make -s -C "$KSRC" M="$MODDIR" modules
+
+echo "[info] Installing module…"
+make -s -C "$KSRC" M="$MODDIR" modules_install
+depmod -a
+
+# 6) Autoload and load now
+echo "hid_playstation" > /etc/modules-load.d/hid_playstation.conf
+modprobe hid_playstation || true
+
+echo "[done] hid_playstation installed and set to autoload."
+echo "[note] If you still don't see /dev/input/js*, also load: 'modprobe joydev'."
+
+```
