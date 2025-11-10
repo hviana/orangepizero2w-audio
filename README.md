@@ -162,7 +162,7 @@ echo "FINALLY, you MUST ENABLE audiogpu OVERLAY ON KERNEL CONFIG!"
 sudo apt install -y supertux frozen-bubble freedoom openarena torcs
 ```
 
-# Enable **Allwinner SoC Audio support V2** options in Armbian compilation with (*):
+# Enable **Allwinner SoC Audio support V2** options in Armbian compilation with (*) - not working yet:
 
 ~~~
 Device Drivers
