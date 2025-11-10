@@ -180,7 +180,7 @@ Device Drivers
   HID bus support ──►
     [*] HIDRAW support                      (CONFIG_HIDRAW)
     Special HID drivers ──►
-      <M> PlayStation HID Driver            (CONFIG_HID_PLAYSTATION)
+      <M> PlayStation HID Driver            (CONFIG_HID_PLAYSTATION) # here is the key!
 
 Input device support ──►
   [*] Joystick interface                    (CONFIG_INPUT_JOYDEV)
