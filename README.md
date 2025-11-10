@@ -174,11 +174,19 @@ Device Drivers
 			→ Allwinner AHUB Support -> if you use hdmi/digital audio
 
 ~~~
-#ps4 joystick
+# ps4 joystick
 ~~~
 Device Drivers
-  → Sound card support
-    → HID bus support
-      → Special HID drivers
-        → PlayStation HID Driver
+  HID bus support ──►
+    [*] HIDRAW support                      (CONFIG_HIDRAW)
+    Special HID drivers ──►
+      <M> PlayStation HID Driver            (CONFIG_HID_PLAYSTATION)
+      <M> Sony PS HID Driver (legacy)       (CONFIG_HID_SONY)   ← keep for PS3/Sixaxis & some clones
+
+Input device support ──►
+  [*] Joystick interface                    (CONFIG_INPUT_JOYDEV)
+  
+Device Drivers ──►
+  [*] User-space I/O driver support ──►
+      [*] User level driver support (UHID)  (CONFIG_UHID)
 ~~~
