@@ -170,7 +170,47 @@ PS4 joystick fix xonotic
 ```bash
 mkdir -p ~/.xonotic/data
 cat > ~/.xonotic/data/autoexec.cfg <<'EOF'
+// --- Xonotic: PS4/DS4 joystick fix (Linux) ---
+// Enable joystick and pick the first detected pad (js0)
+joy_enable "1"
+joy_index "0"
 
+// Left stick: move/strafe
+joy_axisside    "0"   // left stick X -> strafe
+joy_axisforward "1"   // left stick Y -> forward/back
+
+// No vertical movement on sticks
+joy_axisup      "-1"  // disable
+
+// RIGHT STICK → CAMERA (Profile A: common on Linux)
+joy_axisyaw     "3"   // right stick X -> look left/right
+joy_axispitch   "4"   // right stick Y -> look up/down
+
+// If camera still doesn’t move with the right stick, try Profile B instead:
+// joy_axisyaw   "2"
+// joy_axispitch "5"
+
+// Deadzones to stop drift/auto-rotation (tweak if needed)
+joy_deadzoneyaw     "0.20"
+// Kill slow downward drift on right-stick (camera pitch)
+joy_deadzonepitch "0.40"
+joy_sensitivitypitch "0.90"
+joy_deadzoneside    "0.12"
+joy_deadzoneforward "0.12"
+
+// Sensitivity (sign controls direction)
+joy_sensitivityyaw   "-1.0"  // keep negative so “stick right = turn right”
+joy_sensitivitypitch  "1.0"  // set to -1.0 if you prefer inverted look
+
+// Don’t also emit arrow-key events from axes (prevents weird doubles)
+joy_axiskeyevents "0"
+
+// Optional quick switchers (use from console: `joy_profile_a` / `joy_profile_b`)
+alias joy_profile_a "joy_axisyaw 3; joy_axispitch 4"
+alias joy_profile_b "joy_axisyaw 2; joy_axispitch 5"
+
+// Log
+echo "🔧 Loaded joystick fix from autoexec.cfg"
 EOF
 
 ```
