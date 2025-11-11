@@ -166,6 +166,14 @@ sudo apt install flatpak
 flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install flathub org.xonotic.Xonotic
 ```
+PS4 joystick fix xonotic
+```bash
+mkdir -p ~/.xonotic/data
+cat > ~/.xonotic/data/autoexec.cfg <<'EOF'
+
+EOF
+
+``
 # Enable **Allwinner SoC Audio support V2** options in Armbian compilation with (*) - not working yet:
 
 ~~~
