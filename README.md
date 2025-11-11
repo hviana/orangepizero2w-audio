@@ -159,7 +159,7 @@ echo "FINALLY, you MUST ENABLE audiogpu OVERLAY ON KERNEL CONFIG!"
 
 # Games to run:
 ```bash
-sudo apt install -y supertux frozen-bubble freedoom
+sudo apt install -y supertux frozen-bubble freedoom chromium-bsu lbreakout2
 ```
 ```bash
 sudo apt install flatpak
