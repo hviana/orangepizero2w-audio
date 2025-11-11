@@ -162,6 +162,8 @@ echo "FINALLY, you MUST ENABLE audiogpu OVERLAY ON KERNEL CONFIG!"
 sudo apt install -y supertux frozen-bubble freedoom
 ```
 ```bash
+sudo apt install flatpak
+flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install flathub org.xonotic.Xonotic
 ```
 # Enable **Allwinner SoC Audio support V2** options in Armbian compilation with (*) - not working yet:
