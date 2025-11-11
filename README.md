@@ -173,7 +173,7 @@ cat > ~/.xonotic/data/autoexec.cfg <<'EOF'
 
 EOF
 
-``
+```
 # Enable **Allwinner SoC Audio support V2** options in Armbian compilation with (*) - not working yet:
 
 ~~~
