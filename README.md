@@ -168,8 +168,8 @@ flatpak install flathub org.xonotic.Xonotic
 ```
 PS4 joystick fix xonotic
 ```bash
-mkdir -p ~/.xonotic/data
-cat > ~/.xonotic/data/autoexec.cfg <<'EOF'
+mkdir -p ~/.var/app/org.xonotic.Xonotic/.xonotic/data
+cat > ~/.var/app/org.xonotic.Xonotic/.xonotic/data/autoexec.cfg <<'EOF'
 // --- Xonotic: PS4/DS4 joystick fix (Linux) ---
 // Enable joystick and pick the first detected pad (js0)
 joy_enable "1"
